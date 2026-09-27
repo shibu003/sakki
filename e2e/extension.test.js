@@ -263,7 +263,7 @@ test('e2e: 戻るボタンで戻ると骨組みを取り直して戻りを数え
   if (visible === 'visible') assert.ok(first.vis > 0 && first.vis <= first.t, `vis=${first.vis} t=${first.t}`);
   else assert.fail(`headless のページが ${visible}（visibilitychange の口を測れない）`);
   console.log(`# 戻るボタン: bfcache から戻った = ${fromCache}（false なら読み込み直し。pageshow の口はこの run では踏んでいない）`);
-  await p.close();
+  // タブは閉じない: 束の元のタブを閉じると束ごと消える（tab_removed）。次の side panel の検査はこの束（一番新しい束）を映す
 });
 
 test('e2e: side panel が一番の迷いで 1 倍に落とし、見出しの上に赤い渦を描く（PBI-0003 AC-7 c）', async () => {
@@ -293,9 +293,10 @@ test('e2e: side panel が一番の迷いで 1 倍に落とし、見出しの上�
     const without = redIn();
     paint(g, f);
     const h = f.items.find((i) => i.k === 'heading' && i.s === tl.spot.key);
-    return { without, withSwirl: redIn(), key: tl.spot.key, mode: f.mode, rad, inHeading: !!h && x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h };
+    return { without, withSwirl: redIn(), key: tl.spot.key, t1: session.t1, mode: f.mode, rad, inHeading: !!h && x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h };
   });
   assert.equal(r.key, '宿の予約');
+  assert.equal(r.t1, back.t1, 'side panel が映したのは戻るボタンの検査の束');
   assert.equal(r.mode, 'worst_spot');
   assert.ok(r.inHeading, '渦の中心が見出しの箱の中');
   assert.ok(r.withSwirl - r.without >= 10, `渦の赤い画素 ${r.withSwirl} - ${r.without}（半径 ${r.rad}）`);
