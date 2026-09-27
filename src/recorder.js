@@ -287,21 +287,21 @@
     }
   }
 
-  // 要素を順に歩く（開いた・閉じた shadow root にも降りる）。fn が 'skip' を返したら中へは降りない
+  // 要素を文書の順（行きがけ順）に歩く。開いた・閉じた shadow root にも、light DOM の子より先に降りる。fn が 'skip' を返したら中へは降りない。
+  // 順は骨組みの items の順 = lost.js の「ページの見出し = 最初の見出し」（PBI-0008: 兄弟を後ろから呼んでいたので h2 が h1 より先に来ていた）
   function forEachElement(root, fn) {
     const stack = [root];
     let seen = 0;
     while (stack.length && seen < MAX_NODES) {
       const node = stack.pop();
-      const kids = node.children ? [...node.children] : [];
-      for (let i = kids.length - 1; i >= 0; i--) {
-        const el = kids[i];
+      if (node !== root && node.nodeType === 1) {
         seen++;
-        if (fn(el) === 'skip') continue;
-        const sr = shadowOf(el);
-        if (sr) stack.push(sr);
-        stack.push(el);
+        if (fn(node) === 'skip') continue;
       }
+      const kids = node.children ? [...node.children] : [];
+      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+      const sr = node.nodeType === 1 && shadowOf(node);
+      if (sr) stack.push(sr);
     }
   }
 
