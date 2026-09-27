@@ -200,6 +200,19 @@ test('e2e: 閉じた shadow DOM の中の欄も骨組みに出て、事象がそ
   await p.close();
 });
 
+test('e2e: label の中の select の選択肢と textarea の文字を名前に混ぜない（PBI-0006）', async () => {
+  const p = await ctx.newPage();
+  await p.goto(url('clinic', 'clinic.html'));
+  await p.selectOption('#dept', '精神科');
+  await p.click('#memo');
+  const S = await waitFor(async () => findSession(await readState(), 'clinic.test'), 'clinic.test の束');
+  const names = S.pages[0].items.filter((i) => i.k === 'field').map((i) => i.s);
+  assert.deepEqual(names, ['診療科', 'ご相談', '時間帯']);
+  const json = JSON.stringify(S);
+  for (const w of ['内科', '精神科', 'はじめの文', '午前', '午後']) assert.ok(!json.includes(w), `記録に「${w}」`);
+  await p.close();
+});
+
 test('e2e: 拡張が再読み込みされたら、古いタブは例外を出さずに止まり、偽の手続きは開き直さない（AC-X2 ②・AC-6 ⑤）', async () => {
   const p = await ctx.newPage();
   const errors = [];

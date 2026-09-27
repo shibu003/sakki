@@ -84,17 +84,24 @@
     walkText(el);
     return text(s);
   }
+  // label の文字。中に入れた select の選択肢・textarea の初めの文字は値なので混ぜない（PBI-0006）
+  function labelText(el) {
+    let s = '';
+    const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let n = tw.nextNode(); n; n = tw.nextNode()) if (!n.parentElement?.closest('select,textarea,datalist')) s += n.nodeValue;
+    return s;
+  }
   function fieldName(el) {
     const by = el.getAttribute('aria-labelledby');
     if (by) {
       const root = el.getRootNode();
-      const s = by.split(/\s+/).map((id) => root.getElementById?.(id)?.textContent || document.getElementById(id)?.textContent || '').join(' ');
-      if (text(s)) return text(s);
+      const s = text(by.split(/\s+/).map((id) => { const l = root.getElementById?.(id) || document.getElementById(id); return l ? labelText(l) : ''; }).join(' '));
+      if (s) return s;
     }
     if (el.getAttribute('aria-label')) return text(el.getAttribute('aria-label'));
-    if (el.labels && el.labels.length) return text([...el.labels].map((l) => l.textContent).join(' '));
     const wrap = el.closest('label');
-    if (wrap) return text(wrap.textContent);
+    const byLabel = text(el.labels && el.labels.length ? [...el.labels].map(labelText).join(' ') : wrap ? labelText(wrap) : '');
+    if (byLabel) return byLabel;
     return text(el.getAttribute('placeholder') || el.getAttribute('title') || '');
   }
   function buttonName(el) {
