@@ -50,6 +50,7 @@ one() {
     caption)  run caption "$W5" src/clip.js "    if (withBand) band(g, lines);|||";;
     faststart) run faststart "$W5" src/clip.js "fastStart: 'in-memory'|||fastStart: false";;
     xmlname)  run xmlname "$W5" src/clip.js "el.removeAttribute(name);|||void 0;";;
+    nocodec)  run nocodec "$W5" src/sidepanel.js "e?.name === 'NotSupportedError' ?|||false ?";;
     stale)    run stale "$W5" src/clip.js "      if (stale()) return null;|||";;
     abort)    run abort "$W5" src/sidepanel.js "if (e?.name === 'AbortError') return;|||";;
     # AC-X2 ②（PBI-0002）: 文脈が切れた時の catch を外す
@@ -57,5 +58,5 @@ one() {
     *) echo "知らない名前: $1"; return 1;;
   esac
 }
-if [ $# -gt 0 ]; then one "$1"; else for m in base search weakless fixed keydown label copymask choice script vh cssom shadow camera nocopy inline overlay caption faststart xmlname stale abort reload; do one "$m"; done; fi
+if [ $# -gt 0 ]; then one "$1"; else for m in base search weakless fixed keydown label copymask choice script vh cssom shadow camera nocopy inline overlay caption faststart xmlname nocodec stale abort reload; do one "$m"; done; fi
 echo "# TAP: $OUT"

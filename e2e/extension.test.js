@@ -624,6 +624,16 @@ test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シ�
   await p.close();
 });
 
+test('e2e: H.264 も VP9 も無い Chrome では「送る」は押せず、訳を出す（PBI-0005 AC-X2 ③）', async () => {
+  const p = await ctx.newPage();
+  await p.addInitScript(() => { VideoEncoder.isConfigSupported = async () => ({ supported: false }); });
+  await p.setViewportSize({ width: 360, height: 640 });
+  await p.goto(`chrome-extension://${extId}/sidepanel.html`);
+  await p.waitForFunction(() => document.getElementById('send').textContent !== '動画を作っています…', null, { timeout: 20000 });
+  assert.deepEqual(await p.$eval('#send', (b) => [b.hidden, b.disabled, b.textContent]), [false, true, 'この Chrome では動画を作れません']);
+  await p.close();
+});
+
 test('e2e: 迷いの無い手続きの完了では何も出ない（PBI-0004 AC-2）', async () => {
   const p = await newTab();
   await p.goto(url('booking', 'booking.html'));
