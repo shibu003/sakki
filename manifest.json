@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "sakki — さっきの自分",
+  "version": "0.1.0",
+  "description": "手続きで迷ったあなたを、さっきの自分が早送りで走り直して見せる。記録は端末のメモリの中だけ。",
+  "minimum_chrome_version": "116",
+  "permissions": ["sidePanel", "storage", "scripting", "contextMenus"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "src/background.js", "type": "module" },
+  "action": { "default_title": "さっきの自分" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/redact.js", "src/recorder.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>さっきの自分を試す</title>
+<style>
+  :root { color-scheme: light; font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; }
+  body { margin: 0; background: #f1f5f9; color: #0f172a; }
+  main { max-width: 520px; margin: 48px auto; padding: 32px; background: #fff; border-radius: 10px; }
+  h1 { font-size: 22px; margin: 0 0 12px; }
+  p { line-height: 1.7; margin: 0 0 16px; }
+  .note { color: #475569; font-size: 13px; }
+  label.row { display: block; margin: 18px 0 6px; font-weight: 600; }
+  input[type=text], select { font: inherit; font-size: 16px; padding: 8px 10px; width: 100%; box-sizing: border-box; border: 1px solid #94a3b8; border-radius: 6px; }
+  .consent { display: flex; gap: 10px; align-items: flex-start; margin: 24px 0; padding: 14px; border: 1px solid #cbd5e1; border-radius: 8px; line-height: 1.6; }
+  .consent input { margin-top: 5px; width: 18px; height: 18px; }
+  button { font: inherit; font-size: 16px; margin-top: 24px; padding: 10px 22px; border: 0; border-radius: 6px; background: #0f766e; color: #fff; cursor: pointer; }
+  .alert { margin-top: 10px; color: #b91c1c; font-size: 14px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <section id="s0">
+    <h1>さっきの自分を、30 秒で試す</h1>
+    <p>これは本物ではない予約の手続きです。どこにも送られません。</p>
+    <label class="consent"><input type="checkbox" id="consent"><span>迷った所をこの端末の中だけに録り、完了画面で見せる</span></label>
+    <p class="note">印を付けると、この後の手続きから録り始めます。付けなくても最後まで進めます。印はいつでもここで外せます（外すと記録は全部消えます）。</p>
+    <button type="button" id="start">はじめる</button>
+  </section>
+
+  <section id="s1" hidden>
+    <h1>宿の予約（ためし）</h1>
+    <form id="book" novalidate>
+      <label class="row" for="name">お名前</label>
+      <input type="text" id="name" autocomplete="off" placeholder="ためしなので、何でも">
+      <label class="row" for="day">泊まる日</label>
+      <select id="day">
+        <option value="">選んでください</option>
+        <option>10月14日（火）</option>
+        <option>10月15日（水）</option>
+        <option>10月16日（木）</option>
+        <option>10月17日（金）</option>
+        <option>10月18日（土）</option>
+      </select>
+      <p class="alert" id="full" role="alert" hidden>その日は満席です。別の日を選んでください。</p>
+      <button type="submit">予約する</button>
+    </form>
+  </section>
+
+  <section id="s2" hidden>
+    <h1>予約が完了しました（ためし）</h1>
+    <p id="yes" hidden>ツールバーの sakki のアイコン（パズルの形のボタンの中）を押すと、右の欄で「さっきの私」が走り直します。</p>
+    <p id="no" hidden>同意の欄に印が無かったので、何も録っていません。</p>
+  </section>
+</main>
+<script src="src/redact.js"></script>
+<script src="src/recorder.js"></script>
+<script src="src/onboarding.js"></script>
+</body>
+</html>
