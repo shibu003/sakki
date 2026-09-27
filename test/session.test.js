@@ -240,3 +240,24 @@ test('session: ページより先に届いた事象は捨てても、覚える�
   assert.equal(st.sessions[1].pages[0].evs.length, 0, 'ページの無い事象は捨てる');
   assert.deepEqual(st.sessions[1].memo, ['3yamada'], '一緒に来た覚える集まりは残る（後のページで値が伏せられる）');
 });
+
+test('session: 実際の見た目の写しを持ち、社内の束では捨て、上限では写しから先に捨てる（PBI-0007 AC-X2）', () => {
+  const withDom = (tab, host, t, heading) => ({ ...page(tab, host, t, heading), dom: `<h1>${heading}</h1>` });
+  let { st } = run([hello(1, 'booking.test', 1000), withDom(1, 'booking.test', 1010, '予約'), ev(1, 'booking.test', 1020, 'input', { n: 1 }),
+    withDom(1, 'booking.test', 1100, '確認'), withDom(1, 'booking.test', 1200, '完了')]);
+  assert.deepEqual(st.sessions[1].pages.map((p) => p.dom), ['<h1>予約</h1>', '<h1>確認</h1>', '<h1>完了</h1>']);
+  // 上限: 一番古い写しから捨て、ページ（骨組み）は残す。写しが尽きてからページを捨てる
+  st = shrink(st);
+  assert.deepEqual(st.sessions[1].pages.map((p) => [p.items[0].s, !!p.dom]), [['予約', false], ['確認', true], ['完了', true]]);
+  st = shrink(shrink(st));
+  assert.equal(st.sessions[1].pages.length, 3);
+  assert.ok(st.sessions[1].pages.every((p) => !('dom' in p)));
+  st = shrink(st);
+  assert.deepEqual(st.sessions[1].pages.map((p) => p.items[0].s), ['確認', '完了']);
+  // 社内: 写しは受けず、okta を通ったら前の写しも捨てる
+  const inner = run([hello(1, 'intranet', 1000), withDom(1, 'intranet', 1010, '人事')]).st;
+  assert.ok(!('dom' in inner.sessions[1].pages[0]));
+  const okta = run([hello(1, 'booking.test', 1000), withDom(1, 'booking.test', 1010, '予約'), hello(1, 'acme.okta.com', 2000),
+    hello(1, 'booking.test', 3000), withDom(1, 'booking.test', 3010, '確認')]).st;
+  assert.ok(!/<h1>/.test(JSON.stringify(okta)));
+});

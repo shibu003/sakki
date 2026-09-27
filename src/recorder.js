@@ -1,5 +1,5 @@
-// 骨組みだけを記録する（REQ-2・弱点 #5 #6 #7）。content script と偽の手続きのページの両方で読む classic script。
-// 取るのは focus・click・input の瞬間だけ。最初の focus か click までは中身を送らない（読み込み時の ask は中身なし）。MutationObserver は持たない。
+// 骨組みと実際の見た目の写しを記録する（REQ-2・弱点 #5 #6 #7・PBI-0007）。content script と偽の手続きのページの両方で読む classic script。
+// 取るのは focus・click・input の瞬間だけ（写しは見出しが替わった時の 1 枚）。最初の focus か click までは中身を送らない（読み込み時の ask は中身なし）。MutationObserver は持たない。
 // 完了（REQ-4・図 1 の detect_completion）: 押した後と押して移った先だけ、決められるまで 4 回見る。渦があれば角にゴースト（REQ-5・show_ghost）。
 (function () {
   'use strict';
@@ -336,6 +336,114 @@
     return items;
   }
 
+  // ---- 実際の見た目の写し（PBI-0007・docs/diagrams.md 図 3）----
+  // 今の DOM を HTML の文字列 1 本に写す。文字と見える属性には骨組みと同じ伏せる規則（mask）を当て、値・選べる物の文字・script・よその枠は最初から写さない。
+  // 閉じた shadow root も <template shadowrootmode> で写し、side panel が srcdoc で建て直す（rrweb-snapshot 2.1.6 は shadowRoot の accessor しか読まず、閉じた root を落とすので借りない）
+  const MAX_COPY = 2e6;  // ponytail: 1 ページ 200 万文字まで。超えたら骨組みの絵に落ちる
+  const FILLED = '●●●'; // replay.js の FILLED と同じ
+  const GREY = '#cbd5e1';
+  const VOID = new Set(['AREA', 'BASE', 'BR', 'COL', 'EMBED', 'HR', 'IMG', 'INPUT', 'LINK', 'META', 'SOURCE', 'TRACK', 'WBR']);
+  // script を止めた iframe では noscript の中身が出る・meta refresh は再生の枠を本物のサイトへ飛ばす・datalist は前に入れた値の候補
+  const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'TEMPLATE', 'META', 'BASE', 'TITLE', 'SOURCE', 'TRACK', 'DATALIST']);
+  const BOXED = new Set(['IFRAME', 'FRAME', 'EMBED', 'OBJECT', 'VIDEO', 'AUDIO', 'CANVAS']); // 中身を映せない物 = 同じ大きさの灰色の箱
+  const SANITIZED = /^(number|date|time|month|week|datetime-local)$/; // value="●●●" を空にしてしまう type
+  const TEXT_ATTR = /^(alt|title|placeholder|label|content|summary|aria-.*|data-.*)$/;
+  const DROP_ATTR = /^(on.*|srcdoc|srcset|sizes|action|formaction|ping|checked|selected|value|nonce|integrity)$/;
+  const URL_ATTR = /^(src|href|poster|xlink:href)$/;
+  class TooBig extends Error {}
+
+  const escText = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escAttr = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  // 空の URL は今のページの URL（パスとクエリ）に解けるので写さない
+  const abs = (u) => { try { return !u.trim() ? '' : /^(#|data:)/i.test(u) ? u : new URL(u, document.baseURI).href; } catch { return ''; } };
+  // CSS の相対 url() を絶対に、vh を記録時の px に（再生の iframe の高さは文書の全高なので、vh のままだと伸びて事象の座標とずれる）。
+  // 数の前が空白・:・(・, の時だけ替える（.min-h-\[100vh\] のような class 名は替えない）
+  function fixCss(css, base) {
+    return css
+      .replace(/url\(\s*(['"]?)([^'")]*)\1\s*\)/g, (m, q, u) => { try { return u && !/^(data:|blob:|#)/i.test(u) ? `url("${new URL(u, base).href}")` : m; } catch { return m; } })
+      .replace(/(?<=[\s:(,])(-?(?:\d+\.?\d*|\.\d+))[sld]?vh\b/g, (m, n) => `${+(n * innerHeight / 100).toFixed(2)}px`);
+  }
+  // CSS-in-JS は <style> の textContent が空で規則だけ CSSOM に在る。よそのサイトの stylesheet は読めない（null → link のまま）
+  const cssOf = (sheet) => { try { return fixCss([...sheet.cssRules].map((r) => r.cssText).join('\n'), sheet.href || document.baseURI); } catch { return null; } };
+  const styleTag = (css, media) => `<style${media ? ` media="${escAttr(media)}"` : ''}>${css.replace(/<\//g, '<\\/')}</style>`;
+
+  function copyPage() {
+    const out = [];
+    let size = 0;
+    const put = (s) => { out.push(s); if ((size += s.length) > MAX_COPY) throw new TooBig(); };
+    const sheets = (list) => { for (const s of list || []) { const c = cssOf(s); if (c) put(styleTag(c)); } };
+    // 属性: 見える文字は mask、URL は絶対に、style は fixCss。set は上書き（null = 写さない）
+    const attrs = (el, set = {}) => {
+      let s = '';
+      const t = tag(el);
+      for (const { name, value } of el.attributes) {
+        const k = name.toLowerCase();
+        if (k in set || (DROP_ATTR.test(k) && !(k === 'value' && /^(LI|PROGRESS|METER)$/.test(t)))) continue;
+        let v = value;
+        if (k === 'style') v = fixCss(v, document.baseURI);
+        else if (k === 'href' && (t === 'A' || t === 'AREA')) v = '#';
+        else if (URL_ATTR.test(k)) v = abs(v);
+        else if (TEXT_ATTR.test(k)) v = mask(v, ctx.memo, ctx.seed);
+        s += ` ${name}="${escAttr(v)}"`;
+      }
+      for (const [k, v] of Object.entries(set)) if (v != null) s += ` ${k}="${escAttr(String(v))}"`;
+      return s;
+    };
+    const box = (el) => {
+      const r = el.getBoundingClientRect(), d = getComputedStyle(el).display;
+      put(`<div${attrs(el, { src: null, style: `${fixCss(el.getAttribute('style') || '', document.baseURI)};display:${d === 'inline' ? 'inline-block' : d};width:${r.width}px;height:${r.height}px;background:${GREY}` })}></div>`);
+    };
+    const kids = (parent, blank) => { for (const c of parent.childNodes) visit(c, blank); };
+    // blank = 選べる物の中の文字（選んだ物だけ伏せると、残った方で選んだ物が分かる = 骨組みの choice と同じく全部伏せる）
+    function visit(nd, blank) {
+      if (nd.nodeType === 3) {
+        const v = nd.nodeValue;
+        put(escText(!v.trim() ? v : blank ? v.replace(/\S/g, '■') : mask(v, ctx.memo, ctx.seed)));
+        return;
+      }
+      if (nd.nodeType !== 1) return;
+      const el = nd, t = tag(el), name = el.localName;
+      if (SKIP.has(t)) return;
+      if (BOXED.has(t)) return box(el);
+      if (t === 'LINK') {
+        if (!/\bstylesheet\b/i.test(el.rel) || /\balternate\b/i.test(el.rel) || !el.getAttribute('href')?.trim()) return;
+        const c = el.sheet && cssOf(el.sheet);
+        put(c != null ? styleTag(c, el.media) : `<link rel="stylesheet" href="${escAttr(el.href)}"${el.media ? ` media="${escAttr(el.media)}"` : ''}>`);
+        return;
+      }
+      if (t === 'STYLE') return put(styleTag(cssOf(el.sheet) ?? fixCss(el.textContent, document.baseURI), el.getAttribute('media')));
+      if (t === 'IMG') {
+        const src = el.currentSrc || abs(el.getAttribute('src') || '');
+        return !src || /^blob:/i.test(src) ? box(el) : put(`<img${attrs(el, { src })}>`);
+      }
+      if (t === 'INPUT') {
+        const ty = el.type;
+        if (ty === 'hidden') return; // token・利用者の番号
+        const set = {};
+        if (ty === 'image') set.src = abs(el.getAttribute('src') || '') || null;
+        if (/^(submit|button|reset|image)$/.test(ty)) set.value = el.hasAttribute('value') ? mask(el.value, ctx.memo, ctx.seed) : null;
+        else if (!/^(radio|checkbox|file|color|range)$/.test(ty) && el.value) { set.value = FILLED; if (SANITIZED.test(ty)) set.type = 'text'; }
+        return put(`<input${attrs(el, set)}>`);
+      }
+      if (t === 'TEXTAREA') return put(`<textarea${attrs(el)}>${el.value ? FILLED : ''}</textarea>`);
+      if (t === 'SELECT') return put(`<select${attrs(el)}><option>${el.value ? FILLED : ''}</option></select>`);
+      if (isField(el)) return put(`<${name}${attrs(el)}>${hasValue(el) ? FILLED : ''}</${name}>`); // contenteditable・role=textbox など
+      const b = blank || isChoiceEl(el) || (t === 'LABEL' && /^(radio|checkbox)$/.test(el.control?.type || ''));
+      put(`<${name}${attrs(el)}>`);
+      const sr = shadowOf(el);
+      if (sr) { put('<template shadowrootmode="open">'); kids(sr, b); sheets(sr.adoptedStyleSheets); put('</template>'); }
+      if (VOID.has(t)) return;
+      kids(el, b);
+      if (t === 'HEAD') sheets(document.adoptedStyleSheets);
+      put(`</${name}>`);
+    }
+    try {
+      if (document.compatMode === 'CSS1Compat') put('<!doctype html>');
+      visit(document.documentElement, false);
+      return out.join('');
+    } catch { return undefined; } // 大きすぎる・写せない → 骨組みの絵に落ちる
+  }
+
   // 見えている最初の見出し（隠した画面を DOM に残す SPA では、DOM の順の最初は隠れている事がある）
   const firstHeading = () => {
     for (const h of document.querySelectorAll('h1,h2,[role=heading]')) {
@@ -382,6 +490,7 @@
     out.push({
       type: 'page', vw: innerWidth, vh: innerHeight,
       dh: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0), c: siteColor(), items: walk(),
+      dom: ctx.noText ? undefined : copyPage(), // 社内の束は写さない（骨組みの絵だけ）
     });
   }
   // 溜めていた入力を listener の中で同期に切り離す（hello を待つ間に次の欄の入力で上書きされない）

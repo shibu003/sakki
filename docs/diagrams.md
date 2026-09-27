@@ -1,10 +1,10 @@
 # 開発図
 
-図の識別子（英字の名前）は、実装に同じ名前で現れる。突き合わせは `bash docs/diagrams-check.sh`（下の「再測手順」）。
+図の識別子（英字の名前）は、実装に同じ名前で現れる。構造が変わる変更は同じ commit で図も直す（機械の突き合わせはしない）。
 
 ## 1. MVP の流れ（1 つのタブの中）
 
-出典: EP-0001 REQ-1〜7・PBI-0002 G1・PBI-0003 G1・PBI-0004 G1（2026-09-27 更新）
+出典: EP-0001 REQ-1〜7・PBI-0002 G1・PBI-0003 G1・PBI-0004 G1・PBI-0007（2026-09-27 更新）
 
 ```mermaid
 stateDiagram-v2
@@ -13,7 +13,7 @@ stateDiagram-v2
     onboarding --> idle: 押さずに閉じた（追わない・開き直さない）
     idle --> onboarding: アイコン → side panel の「偽の手続きを開く」
     record_session --> idle: 同意の欄を外した（記録を全部消す）
-    record_session --> record_session: focus・click・input の瞬間に骨組みを取る（伏せる規則 1 本を通す）
+    record_session --> record_session: focus・click・input の瞬間に骨組みと、見出しが替わったらページの写しを取る（伏せる規則 1 本を通す）
     record_session --> detect_completion: 主なボタンを押した ／ 押して移った先を読み込んだ（ask）／ ダウンロード・PDF ／ 印刷の後
     detect_completion --> record_session: 押した form が 16 秒残った（入力の誤り）／ 渦が無い（何も出さない）
     detect_completion --> call_menu: 弱い合図（main に押せる送信ボタンが残る）で渦が在る → 束は続く
@@ -34,6 +34,7 @@ stateDiagram-v2
 - 記録は `chrome.storage.session`（メモリだけ）。外へ送る経路は持たない
 - 迷いは記録中の状態ではなく、記録から後で計算する（図 4）。再生・完了（W3）・動画（W4）が同じ関数を呼ぶ
 - 合図の強さは 1 本の `judge`（main に押せる送信ボタンが残るか）。偽の手続きも同じ道で完了する（専用の道を持たない）
+- 再生（replay_fast・worst_spot）は、写しの在るページを side panel の sandbox の iframe（script なし・押せない）に srcdoc で建て直し、`frame` のカメラで動かす。canvas はその上に ●●●・渦・ゴーストだけを重ねる。写しの無いページ（社内の束・大きすぎた・上限で捨てた）は骨組みの絵
 - ゴーストは拡張のページ（ghost.html）の枠。サイトの文書に記録は入らない。角は右下 → 左下 → 右上 → 左上の順に、固定の要素・文字・欄・ボタン・リンク・画像と重ならない所を 1 回だけ選ぶ
 
 ## 2. 記録の単位（束 = タブ＋そこから開いたタブ）
@@ -56,11 +57,12 @@ stateDiagram-v2
 
 - tab_created の openerTabId が束のタブなら、同じ束に入る
 - done の弱い合図は段を変えない（`weak` の印だけ。束は続き、右クリックで呼べる）。ask（完了を判定してよいか）は段を変えない
-- 束がドットの無いホスト・私的 IP・.local・会社専用の login 窓口（okta・onelogin）を通ったら internal: 文字を全部落とし、以後も取らない
+- 束がドットの無いホスト・私的 IP・.local・会社専用の login 窓口（okta・onelogin）を通ったら internal: 文字と写しを全部落とし、以後も取らない
+- storage.session の上限に当たったら、一番大きい束の一番古い写しから捨てる（そのページは骨組みの絵に落ちる）。写しが尽きたら一番古いページから
 
-## 3. 伏せる規則（1 本。記録する時に当てる）
+## 3. 伏せる規則（1 本。骨組みにも写しにも、記録する時に当てる）
 
-出典: `src/recorder.js` の歩き方・`src/redact.js`（2026-09-27）
+出典: `src/recorder.js` の歩き方・写し（copyPage）・`src/redact.js`・PBI-0007（2026-09-27）
 
 ```mermaid
 flowchart TD
@@ -78,7 +80,24 @@ flowchart TD
     remember[remember: 値・選んだ物・帯の文字の hash] -.-> mask
 ```
 
-- 骨組みを取る前に、今のページの値を全部 remember に入れる（取った後に消す 2 本目は持たない）
+```mermaid
+flowchart TD
+    copyPage[copyPage: 見出しが替わった瞬間の DOM を HTML の文字列 1 本に。閉じた shadow root も template shadowrootmode で] --> noText2{社内の束?}
+    noText2 -- yes --> none[写さない: 骨組みの絵だけ]
+    noText2 -- no --> skip{script・noscript・meta・title・隠した欄・datalist?}
+    skip -- yes --> drop[写さない。on 属性・srcdoc・action・checked・selected も落とす]
+    skip -- no --> boxed{よその枠・canvas・動画・音声・object?}
+    boxed -- yes --> grey[同じ大きさの灰色の箱]
+    boxed -- no --> field{欄の中身?}
+    field -- 文字の欄・select・textarea・contenteditable --> filled[値があれば ●●●。日付・数の欄は text にして ●●●]
+    field -- no --> choice{選べる物の中の文字・radio と checkbox の label?}
+    choice -- yes --> allmask[全部 ■。選んだ物だけ伏せると、残った方で選んだ物が分かる]
+    choice -- no --> mask
+    copyPage -.-> css[CSS: CSSOM から取り、相対 url を絶対に、vh を記録時の px に。読めない stylesheet は link のまま]
+```
+
+- 骨組みと写しを取る前に、今のページの値を全部 remember に入れる（取った後に消す 2 本目は持たない）
+- 本文・見出し・ボタン・見える属性（alt・title・placeholder・aria-・data-）の文字は mask を通して実際のまま。資源の URL（画像・CSS）は再生で読み直すので残し、ページ自身の URL（パスとクエリ）は残さない（空の URL は写さない）
 - 取るのは focus・click・input の瞬間だけ。最初の focus か click までは何も送らない
 
 ## 4. 迷いの検出（記録から後で計算する 1 本）
@@ -99,17 +118,6 @@ flowchart TD
     spotOf --> worstSpot[worstSpot: 1 か所ごとに印の損した間の和集合の長さ。一番長い 1 か所。印 0 なら無し]
 ```
 
-- 印（`([ ])` の形の節点）の集合 = `src/lost.js` が `mark('<kind>', …)` で立てる印の集合（再測手順 4）
+- 印（`([ ])` の形の節点）の集合 = `src/lost.js` が `mark('<kind>', …)` で立てる印の集合
 - 再生は worstSpot の t0〜t1 の窓に入る事象へ向かう間を 1 倍（1 つの間は 1.5 秒・窓全体で 6 秒まで）にし、渦を 1 つだけ描く
 
-## 再測手順
-
-`bash docs/diagrams-check.sh` が次を確かめる（ずれたら exit 1。`git commit` の前に hook が走らせる）:
-
-1. 図の識別子（stateDiagram の状態・flowchart の節点）の集合 = 下の「実装済み」∪「未実装」
-2. 「実装済み」は全部 `src/` に単語として在る。「未実装」は `src/` に 1 つも無い（実装したら「実装済み」へ移す）
-3. 図 2 の状態の集合 = `src/session.js` で `phase` に入れる値の集合（`phase:` と `phase =`）
-4. 図 4 の印の集合（`([ ])` の形の節点）= `src/lost.js` が `mark('<kind>', …)` で立てる印の集合
-
-実装済み: onboarding idle record_session replay_fast worst_spot detect_completion show_ghost call_menu prelude homed closed walk inBand band isMedia media kindOf choice noText pushItem mask remember detectLost refocus repick revisit stall sameField spotOf worstSpot
-未実装: export_clip

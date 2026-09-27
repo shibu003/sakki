@@ -35,12 +35,34 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // state の文字列だけ（箱の数字と memo の hash は除く = 幅 1232 の「123」に当たらない）
 const stringsOf = (S) => JSON.stringify(S, (k, v) => (typeof v === 'number' || k === 'memo' ? undefined : v));
 const textsOf = (S) => S.pages.flatMap((p) => [p.host, ...(p.items || []).map((i) => i.s), ...(p.evs || []).map((e) => e.s)]).filter(Boolean);
+// side panel（拡張のページを 360x640 のタブで開く）と、その中の実際の見た目の iframe
+async function openPanel() {
+  const p = await ctx.newPage();
+  await p.setViewportSize({ width: 360, height: 640 });
+  await p.goto(`chrome-extension://${extId}/sidepanel.html`);
+  return p;
+}
+// Playwright は sandbox の srcdoc の枠の url を about:blank と報告するので、要素から辿る
+const shotOf = async (p) => (await p.$('#page'))?.contentFrame();
+// iframe の文書の点 (x, y) が side panel の画面のどこに出ているか（transform 込み）
+const iframeBox = (p) => p.$eval('#page', (e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, s: r.width / e.offsetWidth }; });
+// 画面の画素（PNG を拡張のページで解く）
+async function pixelAt(p, x, y) {
+  const png = await p.screenshot({ clip: { x: Math.round(x), y: Math.round(y), width: 1, height: 1 } });
+  return p.evaluate(async (b64) => {
+    const bmp = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
+    const g = new OffscreenCanvas(1, 1).getContext('2d');
+    g.drawImage(bmp, 0, 0);
+    return [...g.getImageData(0, 0, 1, 1).data];
+  }, png.toString('base64'));
+}
+const near = (px, rgb, tol = 24) => rgb.every((v, i) => Math.abs(px[i] - v) <= tol);
 
 test.before(async () => {
   server = http.createServer((req, res) => {
     const f = path.join(FIX, new URL(req.url, 'http://x').pathname);
     if (!f.startsWith(FIX) || !fs.existsSync(f)) { res.writeHead(404); return res.end(); }
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { 'content-type': f.endsWith('.svg') ? 'image/svg+xml' : 'text/html; charset=utf-8' });
     res.end(fs.readFileSync(f, 'utf8').replaceAll('PORT', String(port)));
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -107,6 +129,31 @@ test('e2e: 同意の欄を押した後の偽の手続きが記録に入り、完
   assert.ok(S.pages.flatMap((p) => p.evs).some((e) => e.k === 'click'));
 });
 
+test('e2e: 偽の手続きの後に side panel を開くと、実際の見た目の上をゴーストが走る（PBI-0007 AC-1 通し）', async () => {
+  const p = await openPanel();
+  await p.waitForFunction(() => document.body.dataset.mode === 'replay_fast' || document.body.dataset.mode === 'worst_spot', null, { timeout: 10000 });
+  const seen = new Set();
+  while (!(await p.evaluate(() => document.body.dataset.done === '1'))) {
+    const h = await (await shotOf(p))?.evaluate(() => document.querySelector('section:not([hidden]) h1')?.textContent).catch(() => null);
+    if (h) seen.add(h);
+    await sleep(50);
+  }
+  // ゴーストが走るのは事象のあるページ（予約の画面）。完了の画面は押した後なので走らない（side panel の隣に本物が在る）
+  assert.deepEqual([...seen], ['宿の予約（ためし）'], [...seen].join(' / '));
+  assert.equal(await p.$eval('#page', (e) => e.hidden), false, '実際の見た目の iframe が見えている');
+  const look = await (await shotOf(p)).evaluate(() => ({
+    body: getComputedStyle(document.body).backgroundColor, main: getComputedStyle(document.querySelector('main')).backgroundColor,
+    button: getComputedStyle(document.querySelector('button[type=submit]')).backgroundColor, name: document.querySelector('#name').value,
+  }));
+  assert.deepEqual(look, { body: 'rgb(241, 245, 249)', main: 'rgb(255, 255, 255)', button: 'rgb(15, 118, 110)', name: '' }, '偽の手続きの色のまま・名前を打つ前の写し');
+  const S = sessionsOf(await readState()).find((x) => x.home === 'sakki');
+  const s1 = S.pages.find((x) => x.dom?.includes('<section id="s1">'));
+  assert.ok(s1, '宿の予約の画面の写しが在る');
+  assert.match(s1.dom, /<button type="submit">予約する<\/button>/);
+  assert.ok(!JSON.stringify(S).includes('テスト'), '入れた名前は写しにも無い');
+  await p.close();
+});
+
 let booking;
 test('e2e: 値を取らない — 名前も選んだ日も記録に残らない（AC-1）', async () => {
   const p = await ctx.newPage();
@@ -135,11 +182,35 @@ test('e2e: 値を取らない — 名前も選んだ日も記録に残らない�
   assert.equal(kinds, 'focus,click,input,focus,click,input,click,input,click,input,click');
 });
 
-test('e2e: side panel が記録を早送りで描き、最後の位置にゴーストが居る（AC-2 ③・AC-1 ②）', async () => {
-  const p = await ctx.newPage();
-  await p.setViewportSize({ width: 360, height: 640 });
-  await p.goto(`chrome-extension://${extId}/sidepanel.html`);
+test('e2e: side panel が記録を早送りで描き、最後の位置にゴーストが居る・実際の見た目の色と写真・伏せ字（AC-2 ③・AC-1 ②・PBI-0007 AC-1 AC-2）', async () => {
+  const p = await openPanel();
+  // 宿の予約のページを映している間に、画面の画素で header の色と写真を見る（カメラが動いた・ページが替わった回は測り直す）
+  let look = null;
+  for (let i = 0; i < 300 && !look; i++) {
+    const fr = await shotOf(p);
+    const at = () => fr.evaluate(() => {
+      const ph = document.querySelector('#photo');
+      if (document.querySelector('h1')?.textContent !== '宿の予約' || !ph?.complete || !ph.naturalWidth) return null;
+      const r = ph.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }).catch(() => null);
+    const ph = fr && (await at());
+    if (ph) {
+      const a = await iframeBox(p);
+      const header = await pixelAt(p, a.x + 200 * a.s, a.y + 24 * a.s);
+      const photo = await pixelAt(p, a.x + ph.x * a.s, a.y + ph.y * a.s);
+      if (JSON.stringify(a) === JSON.stringify(await iframeBox(p)) && (await at())) look = { header, photo };
+    }
+    if (!look) await sleep(20);
+  }
+  assert.ok(look, '宿の予約のページの写真が side panel に読み込まれた');
+  assert.ok(near(look.header, [15, 118, 110]), `header は実際の色（#0f766e）: ${look.header}`);
+  assert.ok(near(look.photo, [249, 115, 22]), `写真は実際の画像（#f97316）: ${look.photo}`);
   await p.waitForFunction(() => document.body.dataset.done === '1', null, { timeout: 20000 });
+  // 最後は確認のページ: 実際の見た目の上でも、名前と日は伏せ字（AC-2）
+  const last = await (await shotOf(p)).evaluate(() => ({ h1: document.querySelector('h1').textContent, text: document.body.textContent }));
+  assert.equal(last.h1, '■■ 様の予約内容（■■■■■■）', '選んだ日は覚える集まりに入り、数字の間の 月・日 も伏せる');
+  assert.ok(!/山田|10月/.test(last.text), last.text);
   const r = await p.evaluate(async () => {
     const { frame, timeline } = await import('./src/replay.js');
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -166,7 +237,13 @@ test('e2e: login の内側 — 本文を取らず、残す文字も伏せ、画�
   await p.click('#mail');
   const S = await waitFor(async () => findSession(await readState(), 'mypage.test'), 'mypage.test の束');
   const json = stringsOf(S);
-  for (const w of ['残高', '123', 'AB-1234', 'taro', 'example.com', '山田', '太郎', 'カード番号', '4242']) assert.ok(!json.includes(w), `記録に「${w}」`);
+  for (const w of ['123', 'AB-1234', 'taro', 'example.com', '山田', '太郎', 'カード番号', '4242', 'other.test']) assert.ok(!json.includes(w), `記録に「${w}」`);
+  // 実際の見た目の写し（PBI-0007）: 本文は実際のまま、数字・メール・header の名前は伏せ、顔写真は実際の画像、よその枠は灰色の箱
+  const dom = S.pages[0].dom;
+  assert.ok(dom.includes('残高 ■■■■■■■ 円') && dom.includes('予約番号 AB-■■■■'), '本文は実際のまま、数字だけ伏せる');
+  assert.ok(dom.includes('■■■■さんのマイページ') && dom.includes('>■■■■ ■</button>'), 'header の名前は写しでも伏せる');
+  assert.match(dom, /<img id="face"[^>]* src="data:image\/gif;base64,/);
+  assert.match(dom, /<div id="ext"[^>]*background:#cbd5e1/);
   const items = S.pages[0].items;
   const bySel = async (sel) => p.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { w: r.width, h: r.height }; });
   assert.deepEqual(items.filter((i) => i.k === 'heading').map((i) => i.s), ['■■■■さんのマイページ', '予約の確認']);
@@ -215,6 +292,35 @@ test('e2e: label の中の select の選択肢と textarea の文字を名前に
   assert.deepEqual(names, ['診療科', 'ご相談', '時間帯']);
   const json = JSON.stringify(S);
   for (const w of ['内科', '精神科', 'はじめの文', '午前', '午後']) assert.ok(!json.includes(w), `記録に「${w}」`);
+  await p.close();
+});
+
+test('e2e: 罠のページ — 写しに script・値・選んだ物・よその枠を写さず、再生の枠は動かない（PBI-0007 AC-X1）', async () => {
+  const p = await ctx.newPage();
+  await p.goto(url('trap', 'trap.html'));
+  await p.click('#birth');
+  const S = await waitFor(async () => { const x = findSession(await readState(), 'trap.test'); return x?.pages[0]?.dom ? x : null; }, 'trap.test の写し');
+  const dom = S.pages[0].dom;
+  for (const w of ['<script', 'NOSCRIPT-TEXT', 'http-equiv', 'onerror', 'secret-token', 'カード払い', '現地払い', '1990', 'IFRAME-TEXT', 'checked', 'trap.html']) assert.ok(!dom.includes(w), `写しに「${w}」`);
+  assert.ok(dom.includes('支払い方法') && dom.includes('<template shadowrootmode="open"><p id="in">名義の欄</p></template>'), '本文と閉じた shadow root の中は写す');
+  const birth = dom.match(/<input id="birth"[^>]*>/)?.[0] || '';
+  assert.ok(birth.includes('type="text"') && birth.includes('value="●●●"'), `日付の値は ●●●: ${birth}`);
+  const vh = await p.evaluate(() => innerHeight);
+  assert.ok(dom.includes(`height: ${vh}px`) && !dom.includes('height: 100vh') && dom.includes('.min-h-\\[100vh\\]'), 'vh は記録時の px に・class 名は替えない');
+  assert.ok(dom.includes('rgb(1, 2, 3)'), 'CSSOM に足した規則も写す');
+  const q = await openPanel();
+  await q.waitForFunction(() => document.body.dataset.done === '1', null, { timeout: 20000 });
+  await sleep(500);
+  const fr = await shotOf(q);
+  assert.equal(await fr.evaluate(() => location.href), 'about:srcdoc', '再生の枠はよそへ動いていない');
+  const r = await fr.evaluate(() => ({
+    ran: window.__ran ?? null,
+    inner: document.querySelector('#pc').shadowRoot?.querySelector('#in')?.textContent,
+    border: getComputedStyle(document.querySelector('#js')).borderTopColor,
+    hero: document.querySelector('#js').getBoundingClientRect().height,
+  }));
+  assert.deepEqual(r, { ran: null, inner: '名義の欄', border: 'rgb(1, 2, 3)', hero: vh + 7 }, 'script は動かず・閉じた shadow root は建ち・CSSOM の規則が効き・vh は記録時の高さ');
+  await q.close();
   await p.close();
 });
 
@@ -268,10 +374,8 @@ test('e2e: 戻るボタンで戻ると骨組みを取り直して戻りを数え
   // タブは閉じない: 束の元のタブを閉じると束ごと消える（tab_removed）。次の side panel の検査はこの束（一番新しい束）を映す
 });
 
-test('e2e: side panel が一番の迷いで 1 倍に落とし、見出しの上に赤い渦を描く（PBI-0003 AC-7 c）', async () => {
-  const p = await ctx.newPage();
-  await p.setViewportSize({ width: 360, height: 640 });
-  await p.goto(`chrome-extension://${extId}/sidepanel.html`);
+test('e2e: side panel が一番の迷いで 1 倍に落とし、見出しの上に赤い渦を描く・実際の見出しの上（PBI-0003 AC-7 c・PBI-0007 AC-3）', async () => {
+  const p = await openPanel();
   await p.waitForFunction(() => document.body.dataset.mode === 'worst_spot', null, { timeout: 20000, polling: 'raf' });
   await p.waitForFunction(() => document.body.dataset.done === '1', null, { timeout: 30000 });
   const r = await p.evaluate(async () => {
@@ -295,8 +399,15 @@ test('e2e: side panel が一番の迷いで 1 倍に落とし、見出しの上�
     const without = redIn();
     paint(g, f);
     const h = f.items.find((i) => i.k === 'heading' && i.s === tl.spot.key);
-    return { without, withSwirl: redIn(), key: tl.spot.key, t1: session.t1, mode: f.mode, rad, inHeading: !!h && x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h };
+    const end = frame(session, tl.total, view, tl).swirl, cr = c.getBoundingClientRect();
+    return { without, withSwirl: redIn(), key: tl.spot.key, t1: session.t1, mode: f.mode, rad, inHeading: !!h && x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h, end: { x: cr.left + end.x, y: cr.top + end.y } };
   });
+  // 走り終わった画面: 渦の中心が、実際の見た目の iframe の見出し（h1）の箱の中（PBI-0007 AC-3）
+  const a = await iframeBox(p);
+  const h1 = await (await shotOf(p)).evaluate(() => { const b = document.querySelector('h1').getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom, s: document.querySelector('h1').textContent }; });
+  assert.equal(h1.s, '宿の予約');
+  const inH1 = r.end.x >= a.x + h1.l * a.s && r.end.x <= a.x + h1.r * a.s && r.end.y >= a.y + h1.t * a.s && r.end.y <= a.y + h1.b * a.s;
+  assert.ok(inH1, `渦 ${JSON.stringify(r.end)} が h1 ${JSON.stringify(h1)}（${JSON.stringify(a)}）の上`);
   assert.equal(r.key, '宿の予約');
   assert.equal(r.t1, back.t1, 'side panel が映したのは戻るボタンの検査の束');
   assert.equal(r.mode, 'worst_spot');

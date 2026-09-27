@@ -1,0 +1,21 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>支払い</title>
+<meta http-equiv="refresh" content="3600">
+<style id="css"></style>
+<style>body{font-family:sans-serif;margin:0}.hero{height:100vh;background:#7c3aed}.min-h-\[100vh\]{color:#fff}</style>
+<script>window.__ran = 1; document.getElementById('css').sheet.insertRule('#js{border-top:7px solid rgb(1, 2, 3)}');</script>
+</head><body><main>
+<h1>支払いの設定</h1>
+<div class="hero min-h-[100vh]" id="js">帯</div>
+<noscript><p>NOSCRIPT-TEXT</p></noscript>
+<img src="nope.png" onerror="window.__ran = 2" alt="ロゴ" width="10" height="10">
+<input type="hidden" name="csrf" value="secret-token-xyz">
+<fieldset><legend>支払い方法</legend>
+  <label><input type="radio" name="pay" value="card" checked>カード払い</label>
+  <label><input type="radio" name="pay" value="cash">現地払い</label>
+</fieldset>
+<label for="birth">生年月日</label><input id="birth" type="date" value="1990-04-01">
+<iframe srcdoc="<p>IFRAME-TEXT</p>" width="200" height="50"></iframe>
+<pay-card id="pc" style="display:block"></pay-card>
+</main>
+<script>customElements.define('pay-card', class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: 'closed' }).innerHTML = '<p id="in">名義の欄</p>'; } });</script>
+</body></html>

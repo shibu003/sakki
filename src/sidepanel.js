@@ -1,9 +1,26 @@
-// side panel: 同意の前は偽の手続きへの入口、同意の後は今のタブの記録（無ければ一番新しい記録）を早送りで走らせる
+// side panel: 同意の前は偽の手続きへの入口、同意の後は今のタブの記録（無ければ一番新しい記録）を早送りで走らせる。
+// 写しの在るページは、実際の見た目を sandbox の iframe（script なし・押せない）に建て直し、frame のカメラで動かす
 import { timeline, frame, paint } from './replay.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('c');
+const shot = $('page');
 let run = 0;
+let shown = null; // iframe に建てているページ
+
+function show(S, f) {
+  const d = f.dom;
+  const p = d && S.pages[d.pi];
+  shot.hidden = !p;
+  if (!p) return;
+  if (shown !== p) {
+    shown = p;
+    shot.style.width = `${p.vw}px`;
+    shot.style.height = `${Math.max(p.dh || 0, p.vh || 0)}px`;
+    shot.srcdoc = p.dom;
+  }
+  shot.style.transform = `translate(${-d.x}px, ${-d.y}px) scale(${d.scale})`;
+}
 
 function setStatus(mode, text) {
   document.body.dataset.mode = mode; // onboarding / idle / replay_fast
@@ -35,6 +52,7 @@ function play(S) {
     if (me !== run) return;
     const t = Math.min(now - t0, tl.total);
     const f = frame(S, t, { w, h }, tl);
+    show(S, f);
     paint(ctx, f);
     if (document.body.dataset.mode !== f.mode) document.body.dataset.mode = f.mode; // replay_fast / worst_spot（一番の迷いの窓）
     if (t < tl.total) return requestAnimationFrame(tick);

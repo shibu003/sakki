@@ -62,6 +62,7 @@ const addMemo = (S, memo) => {
 const goInternal = (S) => {
   S.internal = true;
   for (const p of S.pages) {
+    delete p.dom; // 実際の見た目の写しも捨てる（骨組みの絵に落ちる）
     if (p.items) p.items = stripText(p.items);
     if (p.evs) p.evs = stripText(p.evs);
   }
@@ -142,6 +143,7 @@ export function reduce(state, msg) {
       tab: msg.tab, host: msg.host, site, t,
       vw: msg.vw, vh: msg.vh, dh: msg.dh, c: msg.c,
       items: S.internal ? stripText(msg.items) : msg.items, evs: [],
+      ...(msg.dom && !S.internal ? { dom: msg.dom } : {}), // 実際の見た目の写し（PBI-0007）
     });
     S.t1 = t;
     return st;
@@ -194,7 +196,8 @@ export function callable(state, tab) {
   return !!S && (S.phase === 'closed' || S.weak != null) && worstSpot(S) != null;
 }
 
-// storage.session の上限（10MB）に当たった時: 一番大きい束の一番古いページから捨てる。空になった束は消す
+// storage.session の上限（10MB）に当たった時: 一番大きい束の、一番古い写しから捨てる（そのページは骨組みの絵に落ちる）。
+// 写しが無くなったら一番古いページから捨て、空になった束は消す
 export function shrink(state) {
   const st = structuredClone(state);
   let big = null;
@@ -204,6 +207,8 @@ export function shrink(state) {
     if (n > size) { size = n; big = r; }
   }
   if (big == null) return st;
+  const withDom = st.sessions[big].pages.find((p) => p.dom);
+  if (withDom) { delete withDom.dom; return st; }
   st.sessions[big].pages.shift();
   if (!st.sessions[big].pages.length) dropSession(st, big);
   return st;

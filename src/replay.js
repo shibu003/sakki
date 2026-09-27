@@ -1,5 +1,6 @@
 // 再生の純粋部分。frame(session, t, view) が表示リストを返し、paint がそれを canvas に描くだけ。
-// side panel の再生も W4 の動画も、この frame 1 本から作る（別の描き方を持たない = 見た物と渡す物が同じ）。
+// 写し（page.dom）の在るページは、side panel が list.dom のカメラで実際の見た目の iframe を動かし、paint はその上に ●●●・渦・ゴーストだけを重ねる。
+// 写しの無いページ（社内の束・大きすぎた・上限で捨てた）は骨組みの絵に落ちる。
 import { worstSpot } from './lost.js';
 
 export const GHOST = { label: 'さっきの私', alpha: 0.6, color: '#4f46e5', r: 9 };
@@ -84,9 +85,9 @@ export function frame(S, t, view, tl = timeline(S)) {
   if (page.away) {
     list.card = { text: awayText(page) };
     // よそのサイトの間は、直前に居た本拠のページを薄く残す
-    const back = [...S.pages.slice(0, cur.pi)].reverse().find((p) => !p.away);
-    if (!back) return list;
-    return drawPage(list, back, null, view);
+    const bi = S.pages.findLastIndex((p, i) => i < cur.pi && !p.away);
+    if (bi < 0) return list;
+    return drawPage(list, S.pages[bi], bi, null, view);
   }
   let g;
   if (samePage) {
@@ -107,10 +108,10 @@ export function frame(S, t, view, tl = timeline(S)) {
     const grow = win.re - HOLD > win.rs ? Math.min(1, (t - win.rs) / (win.re - HOLD - win.rs)) : 1;
     sw = { box: spot.box, r: swirlRadius(spot.loss) * (0.3 + 0.7 * grow), a: (t / 250) % (Math.PI * 2) };
   }
-  return drawPage(list, page, g, view, filled, zoomAt(win, t), sw);
+  return drawPage(list, page, cur.pi, g, view, filled, zoomAt(win, t), sw);
 }
 
-function drawPage(list, page, g, view, filled = new Set(), z = 1, sw = null) {
+function drawPage(list, page, pi, g, view, filled = new Set(), z = 1, sw = null) {
   const scale = (view.w / page.vw) * z;
   const docW = page.vw * scale;
   const docH = Math.max(page.dh || 0, page.vh || 0) * scale;
@@ -118,6 +119,7 @@ function drawPage(list, page, g, view, filled = new Set(), z = 1, sw = null) {
   const camY = g ? Math.round(Math.max(0, Math.min(g.y * scale - view.h / 2, docH - view.h))) : 0;
   list.color = page.c || '#334155';
   list.host = page.host;
+  if (page.dom) list.dom = { pi, scale, x: camX, y: camY }; // 実際の見た目: page 座標 p → 画面 p * scale - (x, y)
   for (const it of page.items) {
     const x = it.x * scale - camX;
     const y = it.y * scale - camY;
@@ -150,10 +152,19 @@ function fitText(ctx, s, w) {
 export function paint(ctx, list) {
   const { w, h } = list;
   ctx.save();
-  ctx.fillStyle = '#f8fafc';
-  ctx.fillRect(0, 0, w, h);
+  if (list.dom) ctx.clearRect(0, 0, w, h); // 下の iframe（実際の見た目）を透かす
+  else { ctx.fillStyle = '#f8fafc'; ctx.fillRect(0, 0, w, h); }
   ctx.textBaseline = 'middle';
   for (const it of list.items) {
+    if (list.dom) { // 実際の見た目の上: 入れた欄に ●●● を重ねるだけ
+      if (!it.v) continue;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(it.x + 2, it.y + 2, Math.max(0, it.w - 4), Math.max(0, it.h - 4));
+      ctx.fillStyle = '#334155';
+      ctx.font = `400 11px ${FONT}`;
+      ctx.fillText(it.v, it.x + 6, it.y + it.h / 2);
+      continue;
+    }
     switch (it.k) {
       case 'band':
         ctx.fillStyle = '#e2e8f0';

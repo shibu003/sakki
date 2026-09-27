@@ -1,7 +1,7 @@
 // 再生の純粋部分（AC-1 ②・AC-2・AC-5）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { timeline, frame, GHOST, FILLED, awayText } from '../src/replay.js';
+import { timeline, frame, paint, GHOST, FILLED, awayText } from '../src/replay.js';
 
 const nameBox = { x: 100, y: 100, w: 200, h: 30 };
 const dayBox = { x: 100, y: 200, w: 200, h: 30 };
@@ -96,4 +96,29 @@ test('replay: 決定的で、出る文字は記録の中の文字と固定の語
 test('replay: 記録が空なら何も描かない', () => {
   const f = frame({ pages: [] }, 0, view);
   assert.deepEqual([f.items, f.ghost, f.total], [[], null, 0]);
+});
+
+test('replay: 写しの在るページは iframe のカメラを返し、paint は背景を塗らずに重ねる物だけ描く（PBI-0007 AC-1・AC-3）', () => {
+  const D = structuredClone(S);
+  D.pages[0].dom = '<h1>宿の予約</h1>';
+  const tl = timeline(D);
+  const s = tl.steps.find((x) => x.ev && x.ev.t === 13000);
+  const a = frame(S, s.rt, view, tl), b = frame(D, s.rt, view, tl);
+  assert.equal(a.dom, undefined);
+  assert.deepEqual(b.dom.pi, 0);
+  // カメラは骨組みと同じ: page 座標 p → p * scale - (x, y)。見出しの箱がそのまま重なる
+  const h = D.pages[0].items[0], hd = b.items.find((it) => it.k === 'heading');
+  assert.ok(Math.abs(h.x * b.dom.scale - b.dom.x - hd.x) < 1e-9 && Math.abs(h.y * b.dom.scale - b.dom.y - hd.y) < 1e-9);
+  assert.deepEqual(b.ghost, a.ghost);
+  // よその箱の間は、直前の本拠のページの写しを映す
+  const away = tl.steps.find((x) => x.away);
+  assert.equal(frame(D, away.rt + 10, view, tl).dom.pi, 0);
+  // paint: 写しの上では clearRect で透かし、骨組みの箱は描かず、●●● だけ重ねる
+  const calls = [];
+  const ctx = new Proxy({}, { get: (_, k) => (k in _ ? _[k] : (...args) => { calls.push([k, ...args]); return { width: 10 }; }), set: (o, k, v) => { o[k] = v; return true; } });
+  paint(ctx, b);
+  assert.equal(calls.find(([k]) => /^(clearRect|fillRect)$/.test(k))[0], 'clearRect');
+  assert.ok(!calls.some(([k, ...xs]) => k === 'fillRect' && xs[0] === 0 && xs[1] === 0 && xs[2] === view.w), '背景を塗らない');
+  assert.ok(calls.some(([k, v]) => k === 'fillText' && v === FILLED), '入れた欄に ●●●');
+  assert.ok(!calls.some(([k, v]) => k === 'fillText' && v === '予約する'), '骨組みのボタン名は描かない');
 });
