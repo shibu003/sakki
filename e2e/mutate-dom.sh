@@ -55,8 +55,8 @@ one() {
     stale)    run stale "$W5" src/clip.js "      if (stale()) return null;|||";;
     abort)    run abort "$W5" src/sidepanel.js "if (e?.name === 'AbortError') return;|||";;
     # module review（e2e/review.test.js）: 名前の欄の見落とし・写しの見える属性
-    namere)   run namere "$RV" $R "|者名|姓|せい|めい|セイ|メイ|フリガナ|ふりがな|カナ|^名$|^名[（(]|\\bname\\b/i;|||姓|せい|めい|セイ|メイ|フリガナ|ふりがな|カナ|^名$|^名[（(]/;";;
-    textattr) run textattr "$RV" src/redact.js "|content|summary|datetime|download|abbr|cite|aria-|||content|summary|aria-";;
+    namere)   run namere "$RV" $R "|者名|姓|せい|めい|セイ|メイ|フリガナ|ふりがな|カナ|^名$|^名[（(]|\\bname\\b/i;||||姓|せい|めい|セイ|メイ|フリガナ|ふりがな|カナ|^名$|^名[（(]/;";;
+    textattr) run textattr "$RV" src/redact.js "|content|summary|datetime|download|abbr|cite|aria-||||content|summary|aria-";;
     # AC-X2 ②（PBI-0002）: 文脈が切れた時の catch を外す
     reload)   run reload '拡張が再読み込み' $R "queue = queue.then(job).catch(() => stop());|||queue = queue.then(job);";;
     *) echo "知らない名前: $1"; return 1;;
