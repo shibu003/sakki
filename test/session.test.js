@@ -229,3 +229,9 @@ test('session: 閉じた瞬間だけゴーストを返す — 2 回目の done�
     assert.equal(reply, undefined, `2 回目の done（タブ ${tab}）はゴーストを返さない`);
   }
 });
+
+test('session: ページより先に届いた事象は捨てても、覚える集まりは残す（PBI-0002 AC-1・E2E の実測）', () => {
+  const { st } = run([hello(1, 'booking.test', 1000), ev(1, 'booking.test', 1010, 'input', { memo: ['3yamada'] }), page(1, 'booking.test', 1020, '予約')]);
+  assert.equal(st.sessions[1].pages[0].evs.length, 0, 'ページの無い事象は捨てる');
+  assert.deepEqual(st.sessions[1].memo, ['3yamada'], '一緒に来た覚える集まりは残る（後のページで値が伏せられる）');
+});

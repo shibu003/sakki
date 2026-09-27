@@ -380,11 +380,16 @@
       dh: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0), c: siteColor(), items: walk(),
     });
   }
-  function takeInput(out) {
+  // 溜めていた入力を listener の中で同期に切り離す（hello を待つ間に次の欄の入力で上書きされない）
+  function detachInput() {
     const pend = pendingInput;
-    if (!pend) return;
+    if (!pend) return null;
     pendingInput = null;
     clearTimeout(pend.timer);
+    return pend;
+  }
+  function takeInput(out, pend) {
+    if (!pend) return;
     collectValues();
     const el = pend.el;
     out.push({
@@ -397,9 +402,11 @@
   }
   // 事象を記録する: 測るのは listener の中（同期）、送るのは順に。最初の 1 回だけ hello の返事を待ってから測る。then は最後の返事を受ける
   function record(build, then) {
+    const pend = detachInput();
     const capture = () => {
       const out = [];
-      takeInput(out);
+      if (lastHeading === null) snapshotIfNeeded(out); // この文書の最初の事象: 入力より先にページ（無いと reducer が入力を捨てる）
+      takeInput(out, pend);
       snapshotIfNeeded(out);
       const ev = build();
       if (ev?.type === 'ev' && shownAt) { ev.vis = shownAt; shownAt = 0; }

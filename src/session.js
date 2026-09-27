@@ -148,9 +148,9 @@ export function reduce(state, msg) {
     return st;
   }
   if (msg.type === 'ev') {
+    addMemo(S, msg.memo); // 事象を捨てる時も、覚える集まりは捨てない（捨てると後のページで値が伏せられない）
     const p = lastPageOf(S, msg.tab);
     if (!p) return st;
-    addMemo(S, msg.memo);
     const { k, x, y, w, h, s, n, p: pick, vis, pr } = msg;
     const ev = { t, k, x, y, w, h };
     if (s && !S.internal) ev.s = s;

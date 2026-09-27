@@ -32,6 +32,8 @@ const findSession = (st, host) => sessionsOf(st).find((S) => S.pages.some((p) =>
 const latestSession = (st, host) => sessionsOf(st).filter((S) => S.pages.some((p) => p.host === host && !p.away)).sort((a, b) => b.t1 - a.t1)[0];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // state の中の「文字」（見出し・欄の名前・ボタン名・ホスト名）を全部集める。memo は hash なので見ない
+// state の文字列だけ（箱の数字と memo の hash は除く = 幅 1232 の「123」に当たらない）
+const stringsOf = (S) => JSON.stringify(S, (k, v) => (typeof v === 'number' || k === 'memo' ? undefined : v));
 const textsOf = (S) => S.pages.flatMap((p) => [p.host, ...(p.items || []).map((i) => i.s), ...(p.evs || []).map((e) => e.s)]).filter(Boolean);
 
 test.before(async () => {
@@ -163,7 +165,7 @@ test('e2e: login の内側 — 本文を取らず、残す文字も伏せ、画�
   await p.goto(url('mypage', 'mypage.html'));
   await p.click('#mail');
   const S = await waitFor(async () => findSession(await readState(), 'mypage.test'), 'mypage.test の束');
-  const json = JSON.stringify(S);
+  const json = stringsOf(S);
   for (const w of ['残高', '123', 'AB-1234', 'taro', 'example.com', '山田', '太郎', 'カード番号', '4242']) assert.ok(!json.includes(w), `記録に「${w}」`);
   const items = S.pages[0].items;
   const bySel = async (sel) => p.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { w: r.width, h: r.height }; });
@@ -440,8 +442,9 @@ test('e2e: 拡張が再読み込みされたら、古いタブは例外を出さ
   await p.goto(url('booking', 'booking.html'));
   await p.click('#name');
   const before = ctx.pages().filter((x) => x.url().includes('/onboarding.html')).length;
-  await sw.evaluate(() => chrome.runtime.reload());
-  sw = await ctx.waitForEvent('serviceworker');
+  const next = ctx.waitForEvent('serviceworker'); // 再読み込みの前に待ち始める（後だと新しい SW の登録を取り逃がす）
+  await sw.evaluate(() => chrome.runtime.reload()).catch(() => {});
+  sw = await next;
   await p.click('#name');
   await p.keyboard.type('鈴木');
   await p.click('button[type=submit]').catch(() => {});
