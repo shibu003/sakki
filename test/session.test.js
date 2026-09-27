@@ -1,7 +1,7 @@
 // 記録の単位の reducer（AC-4・AC-6 ⑤・AC-8・AC-X1〜X3）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reduce, initialState, takeReply, sessionFor, shrink, shouldOpenOnboarding, siteOf, IDLE_MS } from '../src/session.js';
+import { reduce, initialState, takeReply, sessionFor, shrink, shouldOpenOnboarding, siteOf, IDLE_MS, callable } from '../src/session.js';
 
 // メッセージ列を流す。hello の返事は replies に積む
 function run(msgs, st = initialState()) {
@@ -152,4 +152,80 @@ test('session: 事象の p と vis を残す（PBI-0003 の白名簿）', () => 
   const { st } = run([...homed(), ev(1, 'booking.test', 5000, 'input', { p: 1, n: 1 }), ev(1, 'booking.test', 6000, 'focus', { vis: 5500 }), ev(1, 'booking.test', 7000, 'focus', { vis: 9999 })]);
   const evs = st.sessions[1].pages[0].evs.slice(-3);
   assert.deepEqual(evs.map((e) => [e.p, e.vis]), [[1, undefined], [undefined, 5500], [undefined, 7000]]); // vis は事象の時刻を超えない
+});
+
+// ---- PBI-0004: 完了の合図・ゴースト・右クリック ----
+// 1 通流して返事も受ける
+const step = (st, m) => takeReply(reduce(st, { seed: 7, ...m }));
+// 泊まる日を 3 回選んだ束（repick 2 回 = 渦が在る）
+const lostBundle = (tab = 1, host = 'booking.test') => [
+  ...homed(tab, host),
+  ...[2000, 3000, 4000].map((t) => ev(tab, host, t, 'input', { p: 1, s: '泊まる日', y: 200 })),
+];
+const press = (tab, host, t) => ev(tab, host, t, 'click', { pr: 1, s: '予約する' });
+
+test('session: 印の無い束の完了はゴーストを出さない（PBI-0004 AC-2）', () => {
+  let { st } = run(homed());
+  assert.equal(callable(st, 1), false);
+  const [next, reply] = step(st, { type: 'done', level: 'strong', tab: 1, host: 'booking.test', t: 5000 });
+  assert.deepEqual(reply, { ghost: false, tab: 1 });
+  assert.equal(next.sessions[1].phase, 'closed');
+  assert.equal(callable(next, 1), false, '渦が無い束は右クリックも出さない');
+});
+
+test('session: 弱い合図は束を閉じず、右クリックは同じ束のタブだけ（PBI-0004 AC-3・AC-X3 ③）', () => {
+  let { st } = run([
+    ...lostBundle(1),
+    { type: 'tab_created', tab: 2, opener: 1, url: 'https://booking.test/help', t: 4100 },
+    hello(3, 'clinic.test', 4200), page(3, 'clinic.test', 4210, '診療'), ev(3, 'clinic.test', 4220, 'input'),
+  ]);
+  assert.deepEqual([1, 2, 3].map((t) => callable(st, t)), [false, false, false], '合図の前は出さない');
+  let reply;
+  [st, reply] = step(st, { type: 'done', level: 'weak', tab: 1, host: 'booking.test', t: 5000 });
+  assert.equal(reply, undefined, '弱い合図はゴーストを返さない');
+  assert.equal(st.sessions[1].phase, 'homed');
+  assert.equal(st.sessions[1].weak, 5000);
+  assert.deepEqual([1, 2, 3].map((t) => callable(st, t)), [true, true, false], '同じ束のタブ（子のタブも）だけ');
+  const n = st.sessions[1].pages[0].evs.length;
+  st = run([ev(1, 'booking.test', 6000, 'click')], st).st;
+  assert.equal(st.sessions[1].pages[0].evs.length, n + 1, '弱い合図の後も記録は続く');
+  assert.equal(st.sessions[3].phase, 'homed', '別の束は閉じない');
+});
+
+test('session: ask は押した後・PDF・印刷だけ判定させ、古い記録・閉じた束・よそのサイトでは黙る（PBI-0004 AC-X2 ⑤⑥）', () => {
+  const ask = (st, why, tab = 1, host = 'booking.test') => step(st, { type: 'ask', why, tab, host, t: 9000 })[1];
+  assert.equal(ask(initialState(), 'arrive'), undefined, '束が無い');
+  let { st } = run([...lostBundle(1), press(1, 'booking.test', 5000)]);
+  assert.equal(st.sessions[1].pages[0].evs.at(-1).pr, 1, 'pr は白名簿を通る');
+  assert.deepEqual(ask(st, 'arrive'), { check: 1 }, '押して移った先');
+  assert.deepEqual(step(st, { type: 'ask', why: 'arrive', tab: 1, host: 'booking.test', t: 9000 })[0], st, 'ask は束を変えない');
+  assert.equal(ask(st, 'arrive', 1, 'auth.test'), undefined, 'よそのサイト（本拠の外）');
+  // 押した後に移ったページの骨組み（事象なし）があっても、このタブの最後の事象は押した click
+  const moved = run([page(1, 'booking.test', 6000, '確認')], st).st;
+  assert.deepEqual(ask(moved, 'arrive'), { check: 1 });
+  // 同じ束の別のタブには効かない（押したのはタブ 1）
+  const withChild = run([{ type: 'tab_created', tab: 2, opener: 1, url: 'https://booking.test/help', t: 5100 }], st).st;
+  assert.equal(ask(withChild, 'arrive', 2), undefined);
+  // 押した後にまた打った（入力の誤りで戻った）・pr の無い古い形の click（届かなかった押下）
+  const typed = run([ev(1, 'booking.test', 6000, 'input')], st).st;
+  const old = run([...lostBundle(1), ev(1, 'booking.test', 5000, 'click', { s: '予約する' })]).st;
+  assert.deepEqual([ask(typed, 'arrive'), ask(old, 'arrive')], [undefined, undefined]);
+  assert.equal(callable(old, 1), false, '古い形の記録（weak も closed も無い）は右クリックを出さない');
+  // PDF の画面・印刷は押していなくても、束の中なら判定させる
+  assert.deepEqual([ask(typed, 'pdf'), ask(typed, 'print')], [{ check: 1 }, { check: 1 }]);
+  // 閉じた束では黙る
+  const closed = step(st, { type: 'done', level: 'strong', tab: 1, host: 'booking.test', t: 7000 })[0];
+  assert.deepEqual([ask(closed, 'arrive'), ask(closed, 'print')], [undefined, undefined]);
+});
+
+test('session: 閉じた瞬間だけゴーストを返す — 2 回目の done・別のタブ（PBI-0004 AC-X3 ①②）', () => {
+  let { st } = run([...lostBundle(1), { type: 'tab_created', tab: 2, opener: 1, url: 'https://booking.test/help', t: 4100 }]);
+  let reply;
+  [st, reply] = step(st, { type: 'done', level: 'strong', tab: 1, host: 'booking.test', t: 5000 });
+  assert.deepEqual(reply, { ghost: true, tab: 1 });
+  assert.equal(callable(st, 1), true, '閉じた後も右クリックで呼べる（ゴーストが引っ込んだ後の呼び戻し）');
+  for (const [tab, t] of [[1, 5100], [2, 5200]]) {
+    [st, reply] = step(st, { type: 'done', level: 'strong', tab, host: 'booking.test', t });
+    assert.equal(reply, undefined, `2 回目の done（タブ ${tab}）はゴーストを返さない`);
+  }
 });

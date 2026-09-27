@@ -9,6 +9,7 @@
   "background": { "service_worker": "src/background.js", "type": "module" },
   "action": { "default_title": "さっきの自分" },
   "side_panel": { "default_path": "sidepanel.html" },
+  "web_accessible_resources": [{ "resources": ["ghost.html"], "matches": ["<all_urls>"] }],
   "content_scripts": [
     {
       "matches": ["<all_urls>"],

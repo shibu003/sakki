@@ -46,5 +46,7 @@ function play(S) {
 }
 
 $('again').addEventListener('click', load);
+// 開いている side panel でゴーストが押された → 閉じたばかりの記録を走らせ直す
+chrome.runtime.onMessage.addListener((m) => { if (m?.type === 'ghost_pressed') load(); });
 $('try').addEventListener('click', () => chrome.tabs.create({ url: 'onboarding.html' }));
 load();

@@ -303,6 +303,135 @@ test('e2e: side panel が一番の迷いで 1 倍に落とし、見出しの上�
   await p.close();
 });
 
+// ---- PBI-0004: 完了の合図と、角で待つゴースト ----
+const GHOST_SEL = 'iframe[title="さっきの私"]';
+const ghosts = (p) => p.locator(GHOST_SEL).count();
+const tabIdOf = (p) => sw.evaluate((u) => chrome.tabs.query({}).then((ts) => ts.find((t) => t.url === u)?.id), p.url());
+// callable は拡張のページ（偽の手続き）で session.js を読んで、今の state に当てる
+const callableOf = async (p) => onboarding().evaluate(async (tab) => {
+  const { callable } = await import('./src/session.js');
+  const { state } = await chrome.storage.session.get('state');
+  return callable(state, tab);
+}, await tabIdOf(p));
+const boxOf = (p, sel) => p.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom }; });
+const overlap = (a, b) => a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
+// 渦のある束（泊まる日を 3 回選ぶ）を持つタブ
+async function lostTab() {
+  const p = await ctx.newPage();
+  await p.goto(url('booking', 'booking.html'));
+  await p.bringToFront();
+  await p.click('#name');
+  await p.keyboard.type('高橋');
+  for (const d of ['10月14日', '10月16日', '10月15日']) {
+    await p.click('#day');
+    await p.selectOption('#day', d);
+    await sleep(900);
+  }
+  return p;
+}
+const sessionOfTab = async (p) => { const st = await readState(); const id = await tabIdOf(p); return st.sessions[st.root[id] ?? id]; };
+
+test('e2e: 確認画面は弱い合図、完了画面の空いた角にゴースト（PBI-0004 AC-1・AC-3 a・AC-5 a e）', async () => {
+  await sw.evaluate(() => {
+    globalThis.__menu = [];
+    globalThis.__gets = 0;
+    const u = chrome.contextMenus.update;
+    chrome.contextMenus.update = function (id, props, cb) { globalThis.__menu.push([id, props.visible]); return u.call(chrome.contextMenus, id, props, cb); };
+    chrome.runtime.onMessage.addListener((m) => { if (m?.type === 'get') globalThis.__gets++; });
+  });
+  const p = await lostTab();
+  await Promise.all([p.waitForURL(/confirm/), p.click('button[type=submit]')]);
+  // 確認画面: main に確定の submit が残る = 弱い合図。ゴーストは出さず、右クリックだけ
+  const weak = await waitFor(async () => { const S = await sessionOfTab(p); return S?.weak ? S : null; }, '確認画面で弱い合図', 6000);
+  await sleep(2000);
+  assert.equal(await ghosts(p), 0, '確認画面にゴーストは出ない');
+  assert.equal(weak.phase, 'homed');
+  assert.equal(await callableOf(p), true);
+  assert.ok((await sw.evaluate(() => globalThis.__menu)).some(([id, v]) => id === 'call_menu' && v === true), '右クリックの項目を見せた');
+  // 完了画面: 押した form が消え、main に押せる送信ボタンが無い（検索の form は数えない）= 強い合図
+  await Promise.all([p.waitForURL(/done/), p.click('#ok')]);
+  await waitFor(async () => (await ghosts(p)) === 1, '完了画面にゴーストが 1 つ', 6000);
+  const src = await p.$eval(GHOST_SEL, (f) => f.src);
+  assert.equal(src, `chrome-extension://${extId}/ghost.html`);
+  const g = await boxOf(p, GHOST_SEL);
+  const vh = await p.evaluate(() => document.documentElement.clientHeight);
+  assert.ok(Math.abs(g.l - 16) <= 1 && Math.abs(vh - g.b - 16) <= 1, `左下（右下は固定のチャットで塞がる）: ${JSON.stringify(g)} vh=${vh}`);
+  for (const sel of ['h1', '#no', 'header a', '#top', '#chat', 'form[role=search]']) assert.ok(!overlap(g, await boxOf(p, sel)), `${sel} に重ならない`);
+  assert.equal(await p.evaluate((s) => document.activeElement === document.querySelector(s), GHOST_SEL), false, 'focus を奪わない');
+  const S = await sessionOfTab(p);
+  assert.equal(S.phase, 'closed');
+  assert.equal(S.pages.at(-1).items.find((i) => i.k === 'heading')?.s, '予約が完了しました');
+  // サイトが自分で呼ぶ scroll では引っ込まない
+  await p.evaluate(() => scrollTo(0, 300));
+  await sleep(1000);
+  assert.equal(await ghosts(p), 1, 'サイトの scroll では残る');
+  // 押すと side panel が開き（get が来る）、ゴーストは引っ込む
+  await p.frameLocator(GHOST_SEL).locator('#g').click();
+  await waitFor(async () => (await ghosts(p)) === 0, 'ゴーストを押すと引っ込む（side panel が開いた）', 5000);
+  assert.ok((await sw.evaluate(() => globalThis.__gets)) >= 1, 'side panel が get を送った');
+  assert.equal(await callableOf(p), true, '引っ込んだ後も右クリックで呼べる');
+});
+
+test('e2e: 迷いの無い手続きの完了では何も出ない（PBI-0004 AC-2）', async () => {
+  const p = await ctx.newPage();
+  await p.goto(url('booking', 'booking.html'));
+  await p.click('#name');
+  await p.keyboard.type('伊藤');
+  await p.selectOption('#day', '10月15日');
+  await Promise.all([p.waitForURL(/confirm/), p.click('button[type=submit]')]);
+  await Promise.all([p.waitForURL(/done/), p.click('#ok')]);
+  await waitFor(async () => (await sessionOfTab(p))?.phase === 'closed', '完了で閉じる', 6000);
+  await sleep(1500);
+  assert.equal(await ghosts(p), 0);
+  assert.equal(await callableOf(p), false);
+});
+
+test('e2e: 控えの PDF と印刷で完了、入力画面の PDF は弱い・サイトの CSS に負けない・手が動いたら引っ込む（PBI-0004 AC-4・AC-X1 ①・AC-5 b c d・AC-6）', async () => {
+  // (c) 入力画面の約款 PDF: main に「予約する」が残る = 弱い
+  const a = await lostTab();
+  await a.click('#terms');
+  const Sa = await waitFor(async () => { const S = await sessionOfTab(a); return S?.weak ? S : null; }, '入力画面の PDF で弱い合図');
+  assert.equal(Sa.phase, 'homed');
+  assert.equal(await ghosts(a), 0);
+  // (b) 控えの画面で印刷（afterprint）。サイトの CSS が iframe を消そうとしても出る
+  await a.goto(url('booking', 'receipt.html'));
+  await a.addStyleTag({ content: 'iframe{display:none!important;opacity:0!important}' });
+  await a.evaluate(() => dispatchEvent(new Event('afterprint')));
+  await waitFor(async () => (await ghosts(a)) === 1, '印刷の後にゴースト', 6000);
+  assert.equal((await sessionOfTab(a)).phase, 'closed');
+  assert.deepEqual(await a.$eval(GHOST_SEL, (f) => [getComputedStyle(f).display, getComputedStyle(f).opacity]), ['block', '1']);
+  await a.keyboard.press('Shift'); // (c) キー
+  await waitFor(async () => (await ghosts(a)) === 0, 'キーで引っ込む', 2000);
+  // (a) 控えの PDF を押す
+  const b = await lostTab();
+  await b.goto(url('booking', 'receipt.html'));
+  await b.click('#pdf');
+  await waitFor(async () => (await ghosts(b)) === 1, '控えの PDF でゴースト', 6000);
+  assert.equal((await sessionOfTab(b)).phase, 'closed');
+  await b.mouse.click(300, 300); // (d) 本文を押す
+  await waitFor(async () => (await ghosts(b)) === 0, '本文を押すと引っ込む', 2000);
+  await sleep(1500);
+  assert.equal(await ghosts(b), 0, '同じページで出し直さない');
+  // 偽の手続きも同じゴースト（AC-6）。(b) wheel で引っ込む
+  const ob = onboarding();
+  assert.equal(await ghosts(ob), 1, '偽の手続きの完了画面にも同じ枠');
+  assert.equal(await ob.$eval(GHOST_SEL, (f) => f.src), `chrome-extension://${extId}/ghost.html`);
+  await ob.bringToFront();
+  await ob.mouse.move(200, 200);
+  await ob.mouse.wheel(0, 60);
+  await waitFor(async () => (await ghosts(ob)) === 0, 'wheel で引っ込む', 2000);
+});
+
+test('e2e: 角が塞がる完了では出さずに右クリックで呼べる（PBI-0004 AC-X2 ②）', async () => {
+  const p = await lostTab();
+  await p.goto(url('booking', 'full.html'));
+  await p.evaluate(() => dispatchEvent(new Event('afterprint')));
+  await waitFor(async () => (await sessionOfTab(p))?.phase === 'closed', '印刷で閉じる', 6000);
+  await sleep(1000);
+  assert.equal(await ghosts(p), 0, '4 つの角が文字で塞がっている');
+  assert.equal(await callableOf(p), true);
+});
+
 test('e2e: 拡張が再読み込みされたら、古いタブは例外を出さずに止まり、偽の手続きは開き直さない（AC-X2 ②・AC-6 ⑤）', async () => {
   const p = await ctx.newPage();
   const errors = [];

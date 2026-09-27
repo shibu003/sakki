@@ -1,5 +1,6 @@
 // 記録の単位（REQ-6・弱点 #8 #9）の純粋な reducer。SW はメッセージをこれに通して storage.session に置くだけ。
 // 束 = 根のタブ＋そこから開いたタブ。段は prelude → homed → closed（docs/diagrams.md 図 2）。
+import { worstSpot } from './lost.js';
 
 export const IDLE_MS = 30 * 60 * 1000;
 
@@ -37,6 +38,16 @@ const lastPageOf = (S, tab) => {
   for (let i = S.pages.length - 1; i >= 0; i--) if (S.pages[i].tab === tab && !S.pages[i].away) return S.pages[i];
   return null;
 };
+// このタブの最後の事象（事象の無いページは飛ばす）
+const lastEvOf = (S, tab) => {
+  for (let i = S.pages.length - 1; i >= 0; i--) {
+    const p = S.pages[i];
+    if (p.tab === tab && !p.away && p.evs?.length) return p.evs[p.evs.length - 1];
+  }
+  return null;
+};
+// よそのサイト（本拠の外・子のタブなら束の基準の外）
+const awayFor = (S, site, child) => (S.phase === 'homed' && site !== S.home) || (child && baseSite(S) != null && site !== baseSite(S));
 // 本拠へ戻った = 開いているよそのサイトの箱を閉じる
 const closeAway = (S, t) => {
   const last = S.pages[S.pages.length - 1];
@@ -60,7 +71,7 @@ function newSession(root, t, seed) {
   return { root, phase: 'prelude', home: null, internal: false, seed, memo: [], t0: t, t1: t, pages: [] };
 }
 
-// msg.type: hello / page / ev / done / tab_created / tab_removed / tick / revoke
+// msg.type: hello / page / ev / done / ask / tab_created / tab_removed / tick / revoke
 // SW が足す物: tab（sender.tab.id）・host（sender.url のホスト名だけ）・own（拡張自身のページ）・t・seed（新しい束の乱数）
 export function reduce(state, msg) {
   const st = structuredClone(state);
@@ -97,7 +108,7 @@ export function reduce(state, msg) {
     if (S && S.phase === 'closed') { dropSession(st, r); S = null; }  // 完了の後の次の手続き → 閉じた記録を捨てる
     if (!S) S = st.sessions[r] = newSession(Number(r), t, msg.seed);
     if (!msg.own && (isInternalHost(msg.host) || isCorpLogin(msg.host))) goInternal(S);
-    const away = (S.phase === 'homed' && site !== S.home) || (child && baseSite(S) != null && site !== baseSite(S));
+    const away = awayFor(S, site, child);
     closeAway(S, msg.since ?? t);
     if (away) S.pages.push({ away: true, open: true, tab: msg.tab, host: msg.host, t: msg.since ?? t, t1: t });
     S.t1 = t;
@@ -106,13 +117,21 @@ export function reduce(state, msg) {
   }
 
   if (!S || S.phase === 'closed') return st;
+  // 完了を判定してよいか（中身は受けない）: 押して移った先（このタブの最後の事象が主なボタン）・PDF の画面・印刷
+  if (msg.type === 'ask') {
+    if (awayFor(S, site, child) || (msg.why === 'arrive' && !lastEvOf(S, msg.tab)?.pr)) return st;
+    st.reply = { check: 1 };
+    return st;
+  }
   if (msg.type === 'done') {
-    S.phase = 'closed';
     S.t1 = t;
+    if (msg.level === 'weak') { S.weak = t; return st; } // 弱い合図: 束は続く（右クリックだけ）
+    S.phase = 'closed';
+    st.reply = { ghost: worstSpot(S) != null, tab: msg.tab }; // 閉じた瞬間の 1 回だけ = ゴーストは 1 回だけ置く
     return st;
   }
   // よそのサイトからの骨組みと事象は受けない（take:false で来ないはずの物も捨てる）
-  if ((S.phase === 'homed' && site !== S.home) || (child && baseSite(S) != null && site !== baseSite(S))) return st;
+  if (awayFor(S, site, child)) return st;
   closeAway(S, t); // 本拠の事象 = 戻ってきた（back で戻ると bfcache で hello が来ないので、ここでも閉じる）
   if (msg.type === 'page') {
     if (S.phase === 'prelude' && !child && S.pages.some((p) => !p.away && p.site !== site)) {
@@ -132,11 +151,12 @@ export function reduce(state, msg) {
     const p = lastPageOf(S, msg.tab);
     if (!p) return st;
     addMemo(S, msg.memo);
-    const { k, x, y, w, h, s, n, p: pick, vis } = msg;
+    const { k, x, y, w, h, s, n, p: pick, vis, pr } = msg;
     const ev = { t, k, x, y, w, h };
     if (s && !S.internal) ev.s = s;
     if (n) ev.n = n;
     if (pick) ev.p = 1;                         // 選び直しを数える欄（lost.js の repick）
+    if (pr) ev.pr = 1;                          // 主なボタンを押した（次のページの ask が完了を判定させる）
     if (vis > 0) ev.vis = Math.min(vis, t);     // 隠れた後に見えるようになった時刻（lost.js の stall）
     p.evs.push(ev);
     if (k === 'input' && !msg.search && S.phase === 'prelude') {
@@ -167,6 +187,12 @@ export function sessionFor(state, tab) {
   let best = null;
   for (const x of Object.values(state.sessions)) if (x.pages.some((p) => !p.away) && (!best || x.t1 > best.t1)) best = x;
   return best;
+}
+
+// 右クリックの「さっきの自分を呼ぶ」を出すタブ: 束に合図（完了か弱い合図）が来ていて、渦が在る
+export function callable(state, tab) {
+  const S = state.sessions[rootOf(state, tab)];
+  return !!S && (S.phase === 'closed' || S.weak != null) && worstSpot(S) != null;
 }
 
 // storage.session の上限（10MB）に当たった時: 一番大きい束の一番古いページから捨てる。空になった束は消す

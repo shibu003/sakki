@@ -28,6 +28,5 @@ $('book').addEventListener('submit', (e) => {
   const ok = $('consent').checked;
   $('yes').hidden = !ok;
   $('no').hidden = ok;
-  show('s2');
-  if (ok) document.dispatchEvent(new Event('sakki:done')); // recorder が押した事象の後ろに並べて送る
+  show('s2'); // form が隠れ、main に送信ボタンが残らない = 本物のサイトと同じ強い合図で完了（recorder が見る）
 });

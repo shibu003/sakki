@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>さっきの私</title>
+<style>
+  /* 枠を置く側と同じ color-scheme（違うと Chrome が枠を不透明に塗る） */
+  :root { color-scheme: light; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  button {
+    all: unset; box-sizing: border-box; width: 100%; height: 100%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    font: 600 13px "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+    opacity: 0.6; transition: opacity 0.2s; animation: come 0.6s ease-out;
+  }
+  button:hover, button:focus-visible { opacity: 0.9; }
+  button:focus-visible { outline: 2px solid #4f46e5; outline-offset: -3px; border-radius: 26px; }
+  /* 再生のゴーストと同じ形・色（replay.js の GHOST） */
+  .dot { width: 18px; height: 18px; border-radius: 50%; background: #4f46e5; }
+  .tag { padding: 2px 8px; border-radius: 4px; background: #4f46e5; color: #fff; }
+  @keyframes come { from { opacity: 0; transform: translateY(8px); } }
+  @media (prefers-reduced-motion: reduce) { button { animation: none; } }
+</style>
+</head>
+<body>
+  <button id="g" type="button" aria-label="さっきの私 — 押すと横の欄で走り直す"><span class="dot"></span><span class="tag">さっきの私</span></button>
+  <script src="src/ghost.js"></script>
+</body>
+</html>

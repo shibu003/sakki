@@ -1,5 +1,6 @@
 // 骨組みだけを記録する（REQ-2・弱点 #5 #6 #7）。content script と偽の手続きのページの両方で読む classic script。
-// 取るのは focus・click・input の瞬間だけ。最初の focus か click までは何も送らない。MutationObserver もタイマーの見回りも持たない。
+// 取るのは focus・click・input の瞬間だけ。最初の focus か click までは中身を送らない（読み込み時の ask は中身なし）。MutationObserver は持たない。
+// 完了（REQ-4・図 1 の detect_completion）: 押した後と押して移った先だけ、決められるまで 4 回見る。渦があれば角にゴースト（REQ-5・show_ghost）。
 (function () {
   'use strict';
   if (globalThis.__sakkiBooted || typeof document === 'undefined' || !globalThis.chrome?.storage) return;
@@ -16,8 +17,12 @@
   const FIELD_ROLES = /^(textbox|combobox|searchbox|spinbutton)$/;
   const MEDIA = new Set(['IMG', 'PICTURE', 'SVG', 'CANVAS', 'VIDEO', 'IFRAME', 'EMBED', 'OBJECT']);
   const NOT_FIELD_INPUTS = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'radio', 'checkbox', 'password']);
+  const FIELD_SEL = 'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]),select,textarea';
+  const WAITS = [1000, 2000, 5000, 8000]; // 完了を見る間（押してから 1・3・8・16 秒）
+  const GHOST = { w: 148, h: 52, edge: 16 }; // 角に置く枠の大きさと端からの距離
+  const HANDS = ['pointerdown', 'wheel', 'keydown', 'beforeprint']; // 手が動いた（サイトが呼ぶ scroll は入れない）
 
-  let mode = 'idle';     // idle（同意の前・止まった）→ record_session
+  let mode = 'idle';     // idle（同意の前・止まった）→ record_session ⇄ detect_completion（完了を見ている）→ show_ghost（角に居る）
   let ctx = null;        // hello の返事: { take, noText, seed, memo:Set }
   let queue = Promise.resolve();
   let lastHeading = null;
@@ -25,6 +30,9 @@
   let pendingInput = null; // 入力は回数だけ溜める（値は溜めない）
   let shownAt = 0;         // 隠れた後に見えるようになった時刻。次の事象に vis で付ける（隠れていた時間を停止と数えない）
   const lastPressed = new WeakMap(); // form → submit の前に最後に押した submit でない物の名前
+  let detectTimer = null;
+  let ghostEl = null;
+  let ghostTab = null;
 
   const shadowOf = (el) => el.shadowRoot || globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) || null;
   const text = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -114,6 +122,128 @@
   const isSearchField = (el) => el.type === 'search' || role(el) === 'searchbox' || SEARCH_RE.test(el.name || '') || !!el.closest('[role=search],search');
   const isPick = (el) => tag(el) === 'SELECT' || isChoiceEl(el); // 選び直しを数える欄（文字の欄は打つ速さで input が割れる）
   const nameOf = (el) => (ctx.noText ? undefined : mask(fieldName(el), ctx.memo, ctx.seed) || undefined); // 欄の名前（同じ欄を名前と位置で見分ける）
+  const visible = (el) => !el.checkVisibility || el.checkVisibility({ visibilityProperty: true });
+
+  // ---- 完了の合図（図 1 の detect_completion）----
+  // 押した form: form、無ければ欄を持つ一番近い祖先
+  function formOf(el) {
+    const f = el.form || el.closest('form');
+    if (f) return f;
+    for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) if (n.querySelector(FIELD_SEL)) return n;
+    return null;
+  }
+  const inSearch = (el) => !!el.closest('[role=search],search') || [...(el.form?.elements || [])].some((f) => tag(f) === 'INPUT' && isSearchField(f));
+  // 主なボタン: submit か、欄の隣のボタン。帯の中・検索の form・選べる物は除く
+  function isPress(el) {
+    if (!isButton(el) || tag(el) === 'SUMMARY' || isChoiceEl(el) || inSearch(el)) return false;
+    for (let n = el; n; n = n.parentElement) if (inBand(n)) return false;
+    return isSubmit(el) || !!formOf(el);
+  }
+  const isDownload = (el) => {
+    if (tag(el) !== 'A') return false;
+    try { return el.hasAttribute('download') || /\.pdf$/i.test(new URL(el.getAttribute('href') || '', location.href).pathname); } catch { return false; }
+  };
+  // main に押せる送信ボタンが残っている（確認画面・入力画面）。disabled のアンケートは数えない
+  function submitLeft() {
+    let left = false;
+    forEachElement(document.querySelector('main,[role=main]') || document.body, (el) => {
+      if (left || !visible(el) || inBand(el)) return 'skip';
+      if (isPress(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true') left = true;
+      return null;
+    });
+    return left;
+  }
+  const judge = () => (submitLeft() ? 'weak' : 'strong');
+  const gone = (form) => !form.isConnected || !visible(form);
+
+  // 決められるまで WAITS の間で見る（ponytail: 見回りはこの 4 回まで。足りない SPA は次の読み込みの ask で拾う）
+  function detect(ready) {
+    clearTimeout(detectTimer);
+    mode = 'detect_completion';
+    const waits = [...WAITS];
+    const step = () => {
+      if (mode !== 'detect_completion') return;
+      if (ready(!waits.length)) return signal(judge());
+      if (waits.length) detectTimer = setTimeout(step, waits.shift());
+      else mode = 'record_session';
+    };
+    detectTimer = setTimeout(step, waits.shift());
+  }
+  // ① 押した後: 押した form が消えているのを 2 回続けて見たら（読み込み中の一瞬の消えでは立てない）
+  function watchPress(form) {
+    let seen = 0;
+    detect(() => (seen = gone(form) ? seen + 1 : 0) >= 2);
+  }
+  // SW に判定してよいか聞く（中身なし）: arrive = 押して移った先・pdf = PDF の画面・print = 印刷した
+  function ask(why) {
+    enqueue(async () => {
+      const r = await chrome.runtime.sendMessage({ type: 'ask', why });
+      if (!r?.check || mode === 'idle') return;
+      if (why === 'arrive') detect((last) => last || !!firstHeading());
+      else signal(judge());
+    });
+  }
+  function signal(level) {
+    mode = 'record_session';
+    record(() => ({ type: 'done', level }), (r) => { if (r?.ghost) showGhost(r.tab); });
+  }
+
+  // ---- 角で待つゴースト（図 1 の show_ghost）。枠は拡張のページ = サイトの文書に記録は入らない ----
+  // 右下 → 左下 → 右上 → 左上の順に、固定の要素・文字・欄・ボタン・リンク・画像の箱と重ならない角を 1 回だけ選ぶ
+  function freeCorner() {
+    const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+    const { w, h, edge } = GHOST;
+    const tiny = vw < w + 2 * edge || vh < h + 2 * edge;
+    const spots = [['bottom', 'right'], ['bottom', 'left'], ['top', 'right'], ['top', 'left']]
+      .map(([v, side]) => ({ v, side, x: side === 'left' ? edge : vw - edge - w, y: v === 'top' ? edge : vh - edge - h, busy: tiny }));
+    const block = (r) => {
+      if (r.width <= 0 || r.height <= 0) return;
+      for (const s of spots) if (r.left < s.x + w && r.right > s.x && r.top < s.y + h && r.bottom > s.y) s.busy = true;
+    };
+    const range = document.createRange();
+    forEachElement(document, (el) => {
+      if (spots.every((s) => s.busy) || !visible(el)) return 'skip';
+      const pos = getComputedStyle(el).position;
+      const k = kindOf(el);
+      if (pos === 'fixed' || pos === 'sticky' || isMedia(el) || (k && k !== 'heading') || tag(el) === 'A') block(el.getBoundingClientRect());
+      for (const c of el.childNodes) {
+        if (c.nodeType !== 3 || !c.nodeValue.trim()) continue;
+        range.selectNodeContents(c);
+        for (const r of range.getClientRects()) block(r);
+      }
+      return null;
+    });
+    return spots.find((s) => !s.busy) || null;
+  }
+  function showGhost(tab) {
+    if (ghostEl) return;
+    const at = freeCorner();
+    if (!at) return; // 4 つの角が塞がっている → 出さない（右クリックで呼べる）
+    const f = document.createElement('iframe');
+    f.src = chrome.runtime.getURL('ghost.html'); // ponytail: 固定の URL = サイトが拡張の在否を probe できる。use_dynamic_url が iframe で動くと確かめたら替える
+    f.title = 'さっきの私';
+    const css = {
+      position: 'fixed', top: 'auto', right: 'auto', bottom: 'auto', left: 'auto', [at.v]: `${GHOST.edge}px`, [at.side]: `${GHOST.edge}px`,
+      width: `${GHOST.w}px`, height: `${GHOST.h}px`, 'max-width': 'none', 'max-height': 'none', margin: '0', padding: '0', border: '0',
+      display: 'block', visibility: 'visible', opacity: '1', transform: 'none', 'pointer-events': 'auto',
+      background: 'transparent', 'color-scheme': 'light', 'z-index': '2147483647',
+    };
+    for (const [k, v] of Object.entries(css)) f.style.setProperty(k, v, 'important'); // サイトの iframe{display:none!important} に負けない
+    document.documentElement.appendChild(f);
+    ghostEl = f;
+    ghostTab = tab;
+    mode = 'show_ghost';
+    for (const t of HANDS) addEventListener(t, hideGhost, true);
+  }
+  // 引っ込む: 手が動いた・side panel が開いた。同じページで出し直さない（呼び戻すのはアイコンか右クリック）
+  function hideGhost() {
+    if (!ghostEl) return;
+    ghostEl.remove();
+    ghostEl = null;
+    for (const t of HANDS) removeEventListener(t, hideGhost, true);
+    if (mode === 'show_ghost') mode = 'record_session';
+  }
+
   const hasValue = (el) => (tag(el) === 'SELECT' ? el.value !== '' : el.isContentEditable ? !!text(el.textContent) : !!el.value);
 
   // ---- 覚える集まり ----
@@ -224,6 +354,9 @@
     mode = 'idle';
     for (const [type, fn] of LISTENERS) document.removeEventListener(type, fn, true);
     removeEventListener('pageshow', onPageShow);
+    removeEventListener('afterprint', onPrinted);
+    clearTimeout(detectTimer);
+    hideGhost();
     if (pendingInput) clearTimeout(pendingInput.timer);
     pendingInput = null;
     pendingMemo = [];
@@ -262,18 +395,22 @@
   function enqueue(job) {
     queue = queue.then(job).catch(() => stop()); // 文脈が切れた（拡張の再読み込み）→ 止まる。何も溜めない
   }
-  // 事象を記録する: 測るのは listener の中（同期）、送るのは順に。最初の 1 回だけ hello の返事を待ってから測る
-  function record(build) {
+  // 事象を記録する: 測るのは listener の中（同期）、送るのは順に。最初の 1 回だけ hello の返事を待ってから測る。then は最後の返事を受ける
+  function record(build, then) {
     const capture = () => {
       const out = [];
       takeInput(out);
       snapshotIfNeeded(out);
       const ev = build();
-      if (ev && shownAt) { ev.vis = shownAt; shownAt = 0; }
+      if (ev?.type === 'ev' && shownAt) { ev.vis = shownAt; shownAt = 0; }
       if (ev) out.push(ev);
       return out;
     };
-    const flush = async (msgs) => { for (const m of msgs) await send(m); };
+    const flush = async (msgs) => {
+      let r;
+      for (const m of msgs) r = await send(m);
+      then?.(r);
+    };
     if (ctx) { const msgs = capture(); enqueue(() => flush(msgs)); return; }
     enqueue(async () => { if (await ensureReady()) await flush(capture()); });
   }
@@ -315,7 +452,10 @@
     }
     const box = el ? rectOf(el) : { x: Math.round(e.clientX + scrollX) - 8, y: Math.round(e.clientY + scrollY) - 8, w: 16, h: 16 };
     const name = el && isSubmit(el) ? buttonName(el) : '';
-    record(() => ({ type: 'ev', k: 'click', ...box, s: name && !ctx.noText ? mask(name, ctx.memo, ctx.seed) : undefined }));
+    const press = !!el && isPress(el);
+    record(() => ({ type: 'ev', k: 'click', ...box, s: name && !ctx.noText ? mask(name, ctx.memo, ctx.seed) : undefined, pr: press ? 1 : undefined }));
+    if (press) watchPress(formOf(el));             // ① 押した form が消えるか
+    else if (el && isDownload(el)) signal(judge()); // ② 控えのダウンロード・PDF
   }
   // 入力は回数だけ溜める（値は溜めない）。同じ欄の続きは数えるだけ、欄が替わるか 0.8 秒止まったら送る
   function onInput(e) {
@@ -339,19 +479,22 @@
     lastHeading = null;
     shownAt = Date.now();
   }
+  const onPrinted = () => ask('print'); // ③ 印刷の窓が閉じた後（前に出すと控えに写る）
   const LISTENERS = [['focusin', onFocus], ['click', onClick], ['input', onInput], ['submit', onSubmit], ['visibilitychange', onVisible]];
 
   function start() {
-    if (mode === 'record_session') return;
+    if (mode !== 'idle') return;
     mode = 'record_session';
     for (const [type, fn] of LISTENERS) document.addEventListener(type, fn, true);
     addEventListener('pageshow', onPageShow);
+    addEventListener('afterprint', onPrinted);
+    ask(document.contentType === 'application/pdf' ? 'pdf' : 'arrive'); // 押して移った先か、PDF の画面か
   }
 
-  // 偽の手続きの完了（拡張自身のページだけ）: 押した事象の後に、完了の画面の骨組みを取ってから閉じる
-  if (location.protocol === 'chrome-extension:') {
-    document.addEventListener('sakki:done', () => { if (mode === 'record_session') record(() => ({ type: 'done' })); });
-  }
+  // side panel が開いた・ゴーストが押された（SW から。偽の手続きのページには全体宛に tab 付きで来る）
+  chrome.runtime.onMessage.addListener((m) => {
+    if (m?.type === 'ghost_hide' && (m.tab == null || m.tab === ghostTab)) hideGhost();
+  });
 
   // 同意の前は何も読まない・何も送らない。同意の欄が押されたら、その瞬間から録る
   chrome.storage.onChanged.addListener((ch, area) => {

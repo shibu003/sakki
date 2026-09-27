@@ -1,3 +1,4 @@
 <!doctype html><html lang="ja"><head><meta charset="utf-8"><title>確認</title></head>
-<body><main><h1 id="h"></h1><p>内容をご確認ください。</p><button type="button" id="back">戻る</button></main>
+<body><main><h1 id="h"></h1><p>内容をご確認ください。</p><p><button type="button" id="back">戻る</button></p>
+<form action="done.html" method="get"><button type="submit" id="ok">予約を確定する</button></form></main>
 <script>const q=new URLSearchParams(location.search);document.getElementById('h').textContent=`${q.get('name')} 様の予約内容（${q.get('day')}）`;</script></body></html>
