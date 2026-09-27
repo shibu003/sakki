@@ -86,4 +86,6 @@
   sakki.hash = hash;
   sakki.remember = remember;
   sakki.mask = mask;
+  // 写しの属性のうち、人が読む文字を持つ物（mask を当てる）。recorder の写しと、session の当て直しの 2 か所が同じ 1 本を読む
+  sakki.TEXT_ATTR = /^(alt|title|placeholder|label|content|summary|datetime|download|abbr|cite|aria-.*|data-.*)$/;
 })(globalThis);

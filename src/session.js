@@ -1,6 +1,9 @@
 // 記録の単位（REQ-6・弱点 #8 #9）の純粋な reducer。SW はメッセージをこれに通して storage.session に置くだけ。
 // 束 = 根のタブ＋そこから開いたタブ。段は prelude → homed → closed（docs/diagrams.md 図 2）。
 import { worstSpot } from './lost.js';
+import './redact.js'; // 伏せる規則 1 本（classic script。globalThis.sakki に載る）
+
+const { mask, TEXT_ATTR } = globalThis.sakki;
 
 export const IDLE_MS = 30 * 60 * 1000;
 
@@ -54,12 +57,31 @@ const closeAway = (S, t) => {
   const last = S.pages[S.pages.length - 1];
   if (last && last.open) { last.t1 = Math.max(last.t1, t); delete last.open; }
 };
+// 覚える集まりが育ったら、前に取った文字（骨組み・事象・写し）にも新しい分だけ同じ mask を当て直す（弱点 #6「どこに出ても」:
+// 1 ページ目の本文に出ていた名前を、2 ページ目で初めて打った時）。ponytail: 育つたびに束の全部の写しを読み直す。重ければ side panel が読む時だけにする
 const addMemo = (S, memo) => {
   if (!memo || !memo.length) return;
-  const set = new Set(S.memo);
-  for (const m of memo) set.add(m);
-  S.memo = [...set];
+  const had = new Set(S.memo);
+  const fresh = [...new Set(memo)].filter((m) => !had.has(m));
+  if (!fresh.length) return;
+  S.memo = [...had, ...fresh];
+  if (S.internal) return; // 社内の束は文字を持たない
+  for (const p of S.pages) {
+    for (const it of [...(p.items || []), ...(p.evs || [])]) if (it.s) it.s = mask(it.s, fresh, S.seed);
+    if (p.dom) p.dom = remaskCopy(p.dom, fresh, S.seed);
+  }
 };
+// 写しは recorder の copyPage が書いた形だけを読む: 属性は "…"（中の " は &quot;）、文字の < > & は実体参照、style の中の </ は <\/。
+// style の中身と、見える文字でない属性（URL・class・style）には触らない
+const unesc = (s) => s.replace(/&(lt|gt|quot|amp);/g, (_, e) => ({ lt: '<', gt: '>', quot: '"', amp: '&' })[e]);
+function remaskCopy(html, memo, seed) {
+  const m = (s) => mask(unesc(s), memo, seed).replace(/&/g, '&amp;');
+  return html.replace(/(<style(?=[\s>])(?:[^>"]|"[^"]*")*>[\s\S]*?<\/style>)|<(?:[^>"]|"[^"]*")*>|[^<]+/g, (x, style) => {
+    if (style) return x;
+    if (x[0] !== '<') return m(x).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return x.replace(/(\s)([^\s="]+)="([^"]*)"/g, (a, sp, k, v) => (TEXT_ATTR.test(k.toLowerCase()) ? `${sp}${k}="${m(v).replace(/"/g, '&quot;')}"` : a));
+  });
+}
 const goInternal = (S) => {
   S.internal = true;
   for (const p of S.pages) {

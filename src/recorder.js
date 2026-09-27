@@ -5,12 +5,13 @@
   'use strict';
   if (globalThis.__sakkiBooted || typeof document === 'undefined' || !globalThis.chrome?.storage) return;
   globalThis.__sakkiBooted = true; // scripting で差し直された時に二重に動かない
-  const { mask, remember: toMemo } = globalThis.sakki;
+  const { mask, remember: toMemo, TEXT_ATTR } = globalThis.sakki;
 
   const MAX_ITEMS = 600;
   const MAX_NODES = 20000; // ponytail: 大きなページは先頭から 2 万要素まで。足りなければ見える範囲に絞る
   const SMALL = 24;
-  const NAME_RE = /氏名|名前|姓|せい|めい|セイ|メイ|フリガナ|ふりがな|カナ|^名$|^名[（(]/;
+  // 名前の欄（値は長さを問わず、どこに出ても伏せる）。「予約者名」「代表者名」・英語の「Name」も（2 文字の姓が確認画面で素通りしていた）
+  const NAME_RE = /氏名|名前|者名|姓|せい|めい|セイ|メイ|フリガナ|ふりがな|カナ|^名$|^名[（(]|\bname\b/i;
   const NAME_AC = /^(name|family-name|given-name|additional-name|nickname|honorific-prefix|honorific-suffix)$/;
   const SEARCH_RE = /^(q|query|search|keyword|keywords|s|kw)$/i;
   const CHOICE_ROLES = /^(radio|option|tab|checkbox|switch|menuitemradio|menuitemcheckbox)$/;
@@ -347,7 +348,6 @@
   const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'TEMPLATE', 'META', 'BASE', 'TITLE', 'SOURCE', 'TRACK', 'DATALIST']);
   const BOXED = new Set(['IFRAME', 'FRAME', 'EMBED', 'OBJECT', 'VIDEO', 'AUDIO', 'CANVAS']); // 中身を映せない物 = 同じ大きさの灰色の箱
   const SANITIZED = /^(number|date|time|month|week|datetime-local)$/; // value="●●●" を空にしてしまう type
-  const TEXT_ATTR = /^(alt|title|placeholder|label|content|summary|aria-.*|data-.*)$/;
   const DROP_ATTR = /^(on.*|srcdoc|srcset|sizes|action|formaction|ping|checked|selected|value|nonce|integrity)$/;
   const URL_ATTR = /^(src|href|poster|xlink:href)$/;
   class TooBig extends Error {}
@@ -391,7 +391,7 @@
     };
     const box = (el) => {
       const r = el.getBoundingClientRect(), d = getComputedStyle(el).display;
-      put(`<div${attrs(el, { src: null, style: `${fixCss(el.getAttribute('style') || '', document.baseURI)};display:${d === 'inline' ? 'inline-block' : d};width:${r.width}px;height:${r.height}px;background:${GREY}` })}></div>`);
+      put(`<div${attrs(el, { src: null, data: null, poster: null, style: `${fixCss(el.getAttribute('style') || '', document.baseURI)};display:${d === 'inline' ? 'inline-block' : d};width:${r.width}px;height:${r.height}px;background:${GREY}` })}></div>`);
     };
     const kids = (parent, blank) => { for (const c of parent.childNodes) visit(c, blank); };
     // blank = 選べる物の中の文字（選んだ物だけ伏せると、残った方で選んだ物が分かる = 骨組みの choice と同じく全部伏せる）

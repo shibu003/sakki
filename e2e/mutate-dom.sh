@@ -7,6 +7,7 @@ OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/sakki-mutate.XXXXXX")}
 W3='入れた直後|同意の欄を押した後|PBI-0004'
 W7='入れた直後|同意の欄を押した後|値を取らない|PBI-0007|PBI-0003|login の内側'
 W5='入れた直後|同意の欄を押した後|PBI-0004 AC-1|PBI-0005'
+RV='review 通し ①|review 攻撃'
 run() { # $1 = 名前, $2 = 検査の名前の型, $3 = 変える file, $4 = 置換（a|||b。a はその file に 1 回だけ在る）
   local R=$OUT/$1
   rm -rf "$R" && mkdir -p "$R" && (cd "$SRC" && git ls-files -co --exclude-standard | grep -v '^backlog/' | tar -cf - -T -) | tar -xf - -C "$R" && ln -s "$SRC/node_modules" "$R/node_modules"
@@ -25,7 +26,7 @@ PY
 R=src/recorder.js
 one() {
   case "$1" in
-    base)     run base "$W3|$W7|$W5|拡張が再読み込み" $R "const judge = |||const judge = ";;
+    base)     run base "$W3|$W7|$W5|$RV|拡張が再読み込み" $R "const judge = |||const judge = ";;
     # W3（PBI-0004）: 完了の合図と角のゴースト
     search)   run search "$W3" $R "const inSearch = (el) => !!el.closest('[role=search],search') || [...(el.form?.elements || [])].some((f) => tag(f) === 'INPUT' && isSearchField(f));|||const inSearch = () => false;";;
     weakless) run weakless "$W3" $R "const judge = () => (submitLeft() ? 'weak' : 'strong');|||const judge = () => 'strong';";;
@@ -53,10 +54,13 @@ one() {
     nocodec)  run nocodec "$W5" src/sidepanel.js "e?.name === 'NotSupportedError' ?|||false ?";;
     stale)    run stale "$W5" src/clip.js "      if (stale()) return null;|||";;
     abort)    run abort "$W5" src/sidepanel.js "if (e?.name === 'AbortError') return;|||";;
+    # module review（e2e/review.test.js）: 名前の欄の見落とし・写しの見える属性
+    namere)   run namere "$RV" $R "|者名|姓|せい|めい|セイ|メイ|フリガナ|ふりがな|カナ|^名$|^名[（(]|\\bname\\b/i;|||姓|せい|めい|セイ|メイ|フリガナ|ふりがな|カナ|^名$|^名[（(]/;";;
+    textattr) run textattr "$RV" src/redact.js "|content|summary|datetime|download|abbr|cite|aria-|||content|summary|aria-";;
     # AC-X2 ②（PBI-0002）: 文脈が切れた時の catch を外す
     reload)   run reload '拡張が再読み込み' $R "queue = queue.then(job).catch(() => stop());|||queue = queue.then(job);";;
     *) echo "知らない名前: $1"; return 1;;
   esac
 }
-if [ $# -gt 0 ]; then one "$1"; else for m in base search weakless fixed keydown label copymask choice script vh cssom shadow camera nocopy inline overlay caption faststart xmlname nocodec stale abort reload; do one "$m"; done; fi
+if [ $# -gt 0 ]; then one "$1"; else for m in base search weakless fixed keydown label copymask choice script vh cssom shadow camera nocopy inline overlay caption faststart xmlname nocodec stale abort namere textattr reload; do one "$m"; done; fi
 echo "# TAP: $OUT"

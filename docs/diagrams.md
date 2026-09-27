@@ -97,7 +97,8 @@ flowchart TD
 ```
 
 - 骨組みと写しを取る前に、今のページの値を全部 remember に入れる（取った後に消す 2 本目は持たない）
-- 本文・見出し・ボタン・見える属性（alt・title・placeholder・aria-・data-）の文字は mask を通して実際のまま。資源の URL（画像・CSS）は再生で読み直すので残し、ページ自身の URL（パスとクエリ）は残さない（空の URL は写さない）
+- 覚える集まりが後から育ったら（1 ページ目の本文に出ていた名前を 2 ページ目で初めて打った）、reducer の addMemo が前に取った骨組み・事象・写しの文字にも**同じ mask** を新しい分だけ当て直す（規則は 1 本のまま。見える属性の一覧 TEXT_ATTR も redact.js の 1 本を recorder と session が読む）
+- 本文・見出し・ボタン・見える属性（alt・title・placeholder・datetime・download・aria-・data-）の文字は mask を通して実際のまま。資源の URL（画像・CSS）は再生で読み直すので残し、ページ自身の URL（パスとクエリ）は残さない（空の URL は写さない）
 - 取るのは focus・click・input の瞬間だけ。最初の focus か click までは何も送らない
 
 ## 4. 迷いの検出（記録から後で計算する 1 本）

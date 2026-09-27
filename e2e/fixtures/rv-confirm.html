@@ -1,0 +1,7 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>確認</title></head>
+<body><main><h1 id="h"></h1><p id="en"></p>
+<p>チェックイン <time datetime="2026-10-15">10月15日</time></p>
+<p><a id="dl" href="kakunin.pdf">確認書</a></p>
+<object data="frame.html?no=5678" width="120" height="40"></object>
+<form action="rv-done.html" method="get"><input type="hidden" name="who" id="w"><button type="submit" id="ok">予約を確定する</button></form></main>
+<script>const q=new URLSearchParams(location.search),who=q.get('who');document.getElementById('h').textContent=`${who} 様の予約内容`;document.getElementById('en').textContent=`Dear Mr. ${q.get('last')},`;document.getElementById('dl').setAttribute('download',`${who}_予約確認.pdf`);document.getElementById('w').value=who;</script></body></html>
