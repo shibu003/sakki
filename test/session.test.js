@@ -147,3 +147,9 @@ test('session: 登録できるドメインの近似', () => {
   assert.deepEqual(['www.jalan.net', 'ssl.jalan.net', 'acme.smarthr.jp', 'www.city.nerima.tokyo.jp', 'shop.example.co.jp'].map(siteOf),
     ['jalan.net', 'jalan.net', 'smarthr.jp', 'tokyo.jp', 'example.co.jp']);
 });
+
+test('session: 事象の p と vis を残す（PBI-0003 の白名簿）', () => {
+  const { st } = run([...homed(), ev(1, 'booking.test', 5000, 'input', { p: 1, n: 1 }), ev(1, 'booking.test', 6000, 'focus', { vis: 5500 }), ev(1, 'booking.test', 7000, 'focus', { vis: 9999 })]);
+  const evs = st.sessions[1].pages[0].evs.slice(-3);
+  assert.deepEqual(evs.map((e) => [e.p, e.vis]), [[1, undefined], [undefined, 5500], [undefined, 7000]]); // vis は事象の時刻を超えない
+});

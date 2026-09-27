@@ -34,7 +34,9 @@ function play(S) {
   const tick = (now) => {
     if (me !== run) return;
     const t = Math.min(now - t0, tl.total);
-    paint(ctx, frame(S, t, { w, h }, tl));
+    const f = frame(S, t, { w, h }, tl);
+    paint(ctx, f);
+    if (document.body.dataset.mode !== f.mode) document.body.dataset.mode = f.mode; // replay_fast / worst_spot（一番の迷いの窓）
     if (t < tl.total) return requestAnimationFrame(tick);
     setStatus('idle', 'ここまでが、さっきの自分です。');
     document.body.dataset.done = '1';

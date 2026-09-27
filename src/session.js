@@ -132,10 +132,12 @@ export function reduce(state, msg) {
     const p = lastPageOf(S, msg.tab);
     if (!p) return st;
     addMemo(S, msg.memo);
-    const { k, x, y, w, h, s, n } = msg;
+    const { k, x, y, w, h, s, n, p: pick, vis } = msg;
     const ev = { t, k, x, y, w, h };
     if (s && !S.internal) ev.s = s;
     if (n) ev.n = n;
+    if (pick) ev.p = 1;                         // 選び直しを数える欄（lost.js の repick）
+    if (vis > 0) ev.vis = Math.min(vis, t);     // 隠れた後に見えるようになった時刻（lost.js の stall）
     p.evs.push(ev);
     if (k === 'input' && !msg.search && S.phase === 'prelude') {
       S.phase = 'homed';

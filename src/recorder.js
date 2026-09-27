@@ -23,6 +23,7 @@
   let lastHeading = null;
   let pendingMemo = [];
   let pendingInput = null; // 入力は回数だけ溜める（値は溜めない）
+  let shownAt = 0;         // 隠れた後に見えるようになった時刻。次の事象に vis で付ける（隠れていた時間を停止と数えない）
   const lastPressed = new WeakMap(); // form → submit の前に最後に押した submit でない物の名前
 
   const shadowOf = (el) => el.shadowRoot || globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) || null;
@@ -111,6 +112,8 @@
   }
   const isNameField = (el) => NAME_AC.test(el.getAttribute('autocomplete') || '') || NAME_RE.test(fieldName(el));
   const isSearchField = (el) => el.type === 'search' || role(el) === 'searchbox' || SEARCH_RE.test(el.name || '') || !!el.closest('[role=search],search');
+  const isPick = (el) => tag(el) === 'SELECT' || isChoiceEl(el); // 選び直しを数える欄（文字の欄は打つ速さで input が割れる）
+  const nameOf = (el) => (ctx.noText ? undefined : mask(fieldName(el), ctx.memo, ctx.seed) || undefined); // 欄の名前（同じ欄を名前と位置で見分ける）
   const hasValue = (el) => (tag(el) === 'SELECT' ? el.value !== '' : el.isContentEditable ? !!text(el.textContent) : !!el.value);
 
   // ---- 覚える集まり ----
@@ -220,6 +223,7 @@
   function stop() {
     mode = 'idle';
     for (const [type, fn] of LISTENERS) document.removeEventListener(type, fn, true);
+    removeEventListener('pageshow', onPageShow);
     if (pendingInput) clearTimeout(pendingInput.timer);
     pendingInput = null;
     pendingMemo = [];
@@ -244,12 +248,16 @@
     });
   }
   function takeInput(out) {
-    const p = pendingInput;
-    if (!p) return;
+    const pend = pendingInput;
+    if (!pend) return;
     pendingInput = null;
-    clearTimeout(p.timer);
+    clearTimeout(pend.timer);
     collectValues();
-    out.push({ type: 'ev', k: 'input', ...p.box, n: p.n, search: isSearchField(p.el) || undefined });
+    const el = pend.el;
+    out.push({
+      type: 'ev', k: 'input', ...pend.box, n: pend.n, search: isSearchField(el) || undefined,
+      p: isPick(el) ? 1 : undefined, s: isField(el) ? nameOf(el) : undefined, // 選べる物（radio 等）は名前を取らない
+    });
   }
   function enqueue(job) {
     queue = queue.then(job).catch(() => stop()); // 文脈が切れた（拡張の再読み込み）→ 止まる。何も溜めない
@@ -261,6 +269,7 @@
       takeInput(out);
       snapshotIfNeeded(out);
       const ev = build();
+      if (ev && shownAt) { ev.vis = shownAt; shownAt = 0; }
       if (ev) out.push(ev);
       return out;
     };
@@ -293,7 +302,7 @@
     const el = deepTarget(e);
     if (!el || !isField(el)) return;
     const box = rectOf(el);
-    record(() => ({ type: 'ev', k: 'focus', ...box }));
+    record(() => ({ type: 'ev', k: 'focus', ...box, s: nameOf(el) }));
   }
   function onClick(e) {
     const raw = deepTarget(e);
@@ -321,12 +330,22 @@
     const last = lastPressed.get(e.target);
     if (last && ctx) remember(last, false);
   }
-  const LISTENERS = [['focusin', onFocus], ['click', onClick], ['input', onInput], ['submit', onSubmit]];
+  function onVisible() {
+    if (document.visibilityState === 'visible') shownAt = Date.now();
+  }
+  // 戻るボタン（bfcache）: 同じ recorder が同じ見出しのまま再開するので、次の事象で骨組みを取り直す
+  function onPageShow(e) {
+    if (!e.persisted) return;
+    lastHeading = null;
+    shownAt = Date.now();
+  }
+  const LISTENERS = [['focusin', onFocus], ['click', onClick], ['input', onInput], ['submit', onSubmit], ['visibilitychange', onVisible]];
 
   function start() {
     if (mode === 'record_session') return;
     mode = 'record_session';
     for (const [type, fn] of LISTENERS) document.addEventListener(type, fn, true);
+    addEventListener('pageshow', onPageShow);
   }
 
   // 偽の手続きの完了（拡張自身のページだけ）: 押した事象の後に、完了の画面の骨組みを取ってから閉じる

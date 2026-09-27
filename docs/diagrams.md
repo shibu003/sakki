@@ -4,7 +4,7 @@
 
 ## 1. MVP の流れ（1 つのタブの中）
 
-出典: EP-0001 REQ-1〜7・PBI-0002 G1（2026-09-27 更新）
+出典: EP-0001 REQ-1〜7・PBI-0002 G1・PBI-0003 G1（2026-09-27 更新）
 
 ```mermaid
 stateDiagram-v2
@@ -14,15 +14,13 @@ stateDiagram-v2
     idle --> onboarding: アイコン → side panel の「偽の手続きを開く」
     record_session --> idle: 同意の欄を外した（記録を全部消す）
     record_session --> record_session: focus・click・input の瞬間に骨組みを取る（伏せる規則 1 本を通す）
-    record_session --> detect_lost: 同じ欄への focus・同じ見出しへ戻った回数・止まっていた時間
-    detect_lost --> record_session: 迷いの印と、損した時間を積む
     record_session --> detect_completion: submit の後に form が消えた・PDF・印刷
     detect_completion --> record_session: 迷いが 0 回（何も出さない）
-    detect_completion --> show_ghost: 迷いが 1 回以上
+    detect_completion --> show_ghost: 迷いが 1 回以上（図 4 の一番の迷いが在る）
     record_session --> replay_fast: アイコン → side panel（今のタブの記録、無ければ一番新しい記録）
     show_ghost --> replay_fast: ゴーストを押した（side panel が開く）
-    replay_fast --> worst_spot: 一番損した 1 か所に来た
-    worst_spot --> replay_fast: 1 倍で見せ終わり、赤い渦を 1 つ残す
+    replay_fast --> worst_spot: 一番損した 1 か所の窓に入った（1 倍に落とし、1.6 倍まで寄る）
+    worst_spot --> replay_fast: 窓を抜けた（赤い渦は 1 か所のページに残す。大きさ = 損した時間）
     replay_fast --> export_clip: 「送る」を押した
     replay_fast --> record_session: 走り終わった・side panel を閉じた
     export_clip --> replay_fast: 共有シートかダウンロードに渡した
@@ -30,6 +28,7 @@ stateDiagram-v2
 
 - 入口は拡張のアイコン 1 つ（popup は持たない）。押すと side panel が開く
 - 記録は `chrome.storage.session`（メモリだけ）。外へ送る経路は持たない
+- 迷いは記録中の状態ではなく、記録から後で計算する（図 4）。再生・完了（W3）・動画（W4）が同じ関数を呼ぶ
 
 ## 2. 記録の単位（束 = タブ＋そこから開いたタブ）
 
@@ -75,6 +74,27 @@ flowchart TD
 - 骨組みを取る前に、今のページの値を全部 remember に入れる（取った後に消す 2 本目は持たない）
 - 取るのは focus・click・input の瞬間だけ。最初の focus か click までは何も送らない
 
+## 4. 迷いの検出（記録から後で計算する 1 本）
+
+出典: `src/lost.js`・PBI-0003 G1（2026-09-27）
+
+```mermaid
+flowchart TD
+    detectLost[detectLost: 束の全タブの事象を時刻の順に並べる。よそのサイトの箱は除く] -- 欄への focus --> refocus([refocus: 直前の focus が別の欄で、この欄に前にも居た])
+    detectLost -- 選べる物の input --> repick([repick: 同じ欄をもう一度選んだ])
+    detectLost -- ページの最初の事象 --> revisit([revisit: 前に居た見出しへ、別の見出しを挟んで戻った。よその箱だけを挟んだ戻りは 2 回目から])
+    detectLost -- 前の事象から 30 秒を超えた --> stall([stall: 見えていた時間の 30 秒を超えた分。1 回 3 分まで。よその箱を挟んだ間は数えない])
+    refocus --> sameField[sameField: 名前が同じで x と w が ±4px。名前が無ければ同じページか同じ見出しのページで箱が ±4px]
+    repick --> sameField
+    sameField --> spotOf[spotOf: 事象の上で一番近い見出し。無ければ最初の見出し、それも無ければ事象の箱]
+    revisit --> spotOf
+    stall --> spotOf
+    spotOf --> worstSpot[worstSpot: 1 か所ごとに印の損した間の和集合の長さ。一番長い 1 か所。印 0 なら無し]
+```
+
+- 印（`([ ])` の形の節点）の集合 = `src/lost.js` が `mark('<kind>', …)` で立てる印の集合（再測手順 4）
+- 再生は worstSpot の t0〜t1 の窓に入る事象へ向かう間を 1 倍（1 つの間は 1.5 秒・窓全体で 6 秒まで）にし、渦を 1 つだけ描く
+
 ## 再測手順
 
 `bash docs/diagrams-check.sh` が次を確かめる（ずれたら exit 1。`git commit` の前に hook が走らせる）:
@@ -82,6 +102,7 @@ flowchart TD
 1. 図の識別子（stateDiagram の状態・flowchart の節点）の集合 = 下の「実装済み」∪「未実装」
 2. 「実装済み」は全部 `src/` に単語として在る。「未実装」は `src/` に 1 つも無い（実装したら「実装済み」へ移す）
 3. 図 2 の状態の集合 = `src/session.js` で `phase` に入れる値の集合（`phase:` と `phase =`）
+4. 図 4 の印の集合（`([ ])` の形の節点）= `src/lost.js` が `mark('<kind>', …)` で立てる印の集合
 
-実装済み: onboarding idle record_session replay_fast prelude homed closed walk inBand band isMedia media kindOf choice noText pushItem mask remember
-未実装: detect_lost detect_completion show_ghost worst_spot export_clip
+実装済み: onboarding idle record_session replay_fast worst_spot prelude homed closed walk inBand band isMedia media kindOf choice noText pushItem mask remember detectLost refocus repick revisit stall sameField spotOf worstSpot
+未実装: detect_completion show_ghost export_clip

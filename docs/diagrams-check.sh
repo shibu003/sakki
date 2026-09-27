@@ -42,5 +42,11 @@ fig2=$(awk '/^## 2\./{f=1} /^## 3\./{f=0} f' "$md" | grep -- '-->' | cut -d: -f1
 phases=$(sed -E 's#(^|[^:])//.*#\1#' src/session.js | grep -oE "phase( *=|:) *'[a-z_]+'" | grep -oE "'[a-z_]+'" | tr -d "'" | sort -u)
 [ "$fig2" = "$phases" ] || say "図 2 の状態（$(echo $fig2)）と session.js の phase（$(echo $phases)）が違う"
 
+# 4. 図 4 の印（([ ]) の形の節点）の集合 = lost.js が mark('<kind>', …) で立てる印の集合
+fig4=$(awk '/^## 4\./{f=1} /^## 再測/{f=0} f' "$md" | grep -oE '[A-Za-z_]+\(\[' | tr -d '([' | sort -u)
+kinds=$(sed -E 's#(^|[^:])//.*#\1#' src/lost.js | grep -oE "mark\('[a-z_]+'" | grep -oE "'[a-z_]+'" | tr -d "'" | sort -u)
+[ -n "$fig4" ] || say "図 4 から印を 1 つも抜けない"
+[ "$fig4" = "$kinds" ] || say "図 4 の印（$(echo $fig4)）と lost.js の kind（$(echo $kinds)）が違う"
+
 [ "$fail" = 0 ] && echo "diagrams-check: ok（識別子 $(echo "$ids" | wc -l | tr -d ' ')・実装済み $(echo "$done_ids" | wc -l | tr -d ' ')・phase $(echo $phases)）"
 exit "$fail"

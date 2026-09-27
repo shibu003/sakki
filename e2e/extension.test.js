@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { worstSpot, detectLost } from '../src/lost.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = path.join(ROOT, 'e2e', 'fixtures');
@@ -28,6 +29,8 @@ async function waitFor(fn, what, ms = 8000) {
 }
 const sessionsOf = (st) => Object.values(st.sessions);
 const findSession = (st, host) => sessionsOf(st).find((S) => S.pages.some((p) => p.host === host && !p.away));
+const latestSession = (st, host) => sessionsOf(st).filter((S) => S.pages.some((p) => p.host === host && !p.away)).sort((a, b) => b.t1 - a.t1)[0];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // state の中の「文字」（見出し・欄の名前・ボタン名・ホスト名）を全部集める。memo は hash なので見ない
 const textsOf = (S) => S.pages.flatMap((p) => [p.host, ...(p.items || []).map((i) => i.s), ...(p.evs || []).map((e) => e.s)]).filter(Boolean);
 
@@ -210,6 +213,92 @@ test('e2e: label の中の select の選択肢と textarea の文字を名前に
   assert.deepEqual(names, ['診療科', 'ご相談', '時間帯']);
   const json = JSON.stringify(S);
   for (const w of ['内科', '精神科', 'はじめの文', '午前', '午後']) assert.ok(!json.includes(w), `記録に「${w}」`);
+  await p.close();
+});
+
+test('e2e: 実機の選び直しで渦が立つ — booking と偽の手続き（PBI-0003 AC-7 a b）', async () => {
+  const evs = booking.pages[0].evs;
+  assert.equal(evs.filter((e) => e.k === 'input' && e.p === 1).length, 3, 'select の選び直し 3 回に p:1');
+  assert.equal(evs.filter((e) => e.k === 'input' && !e.p).length, 1, '文字の欄の input には p が無い');
+  assert.deepEqual(evs.filter((e) => e.k === 'focus').map((e) => e.s), ['お名前', '泊まる日']);
+  const spot = worstSpot(booking);
+  assert.equal(spot?.key, '宿の予約');
+  assert.deepEqual(spot.marks, ['repick', 'repick']);
+  const ob = sessionsOf(await readState()).find((S) => S.home === 'sakki');
+  assert.ok(ob, '偽の手続きの束が残っている');
+  assert.equal(worstSpot(ob)?.key, '宿の予約（ためし）', '偽の手続きは必ず渦が立つ');
+});
+
+let back;
+test('e2e: 戻るボタンで戻ると骨組みを取り直して戻りを数え、見えるようになった時刻が事象に付く（PBI-0003 AC-4・AC-5 d）', async () => {
+  const p = await ctx.newPage();
+  await p.goto(url('booking', 'booking.html'));
+  await p.evaluate(() => addEventListener('pageshow', (e) => { window.__ps = e.persisted; })); // bfcache から戻ると残る
+  await p.click('#name');
+  await p.keyboard.type('佐藤');
+  for (const d of ['10月14日', '10月16日']) {
+    await p.click('#day');
+    await p.selectOption('#day', d);
+    await sleep(900);
+  }
+  await Promise.all([p.waitForURL(/confirm/), p.click('button[type=submit]')]);
+  await p.click('#back');
+  await p.goBack();
+  await p.waitForURL(/booking\.html/);
+  const fromCache = await p.evaluate(() => window.__ps === true);
+  const visible = await p.evaluate(() => document.visibilityState);
+  await p.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); // 隠れた後に見えるようになった、を起こす
+  await p.click('#name');
+  back = await waitFor(async () => {
+    const S = latestSession(await readState(), 'booking.test');
+    return S && S.pages.filter((x) => !x.away).length >= 3 && S.pages.at(-1).evs.length ? S : null;
+  }, 'booking.test の束に戻った後のページと事象が入る');
+  const heads = back.pages.map((x) => x.items.find((i) => i.k === 'heading')?.s);
+  assert.equal(heads.length, 3, heads.join(' / '));
+  assert.deepEqual([heads[0], heads[2]], ['宿の予約', '宿の予約']);
+  assert.notEqual(heads[1], '宿の予約');
+  assert.deepEqual(back.pages[1].evs.map((e) => e.k), ['click'], '戻った後の事象は確認のページに付かない');
+  assert.ok(detectLost(back).some((m) => m.kind === 'revisit' && m.key === '宿の予約'), '戻りの印');
+  const first = back.pages[2].evs[0];
+  if (visible === 'visible') assert.ok(first.vis > 0 && first.vis <= first.t, `vis=${first.vis} t=${first.t}`);
+  else assert.fail(`headless のページが ${visible}（visibilitychange の口を測れない）`);
+  console.log(`# 戻るボタン: bfcache から戻った = ${fromCache}（false なら読み込み直し。pageshow の口はこの run では踏んでいない）`);
+  await p.close();
+});
+
+test('e2e: side panel が一番の迷いで 1 倍に落とし、見出しの上に赤い渦を描く（PBI-0003 AC-7 c）', async () => {
+  const p = await ctx.newPage();
+  await p.setViewportSize({ width: 360, height: 640 });
+  await p.goto(`chrome-extension://${extId}/sidepanel.html`);
+  await p.waitForFunction(() => document.body.dataset.mode === 'worst_spot', null, { timeout: 20000, polling: 'raf' });
+  await p.waitForFunction(() => document.body.dataset.done === '1', null, { timeout: 30000 });
+  const r = await p.evaluate(async () => {
+    const { frame, timeline, paint } = await import('./src/replay.js');
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const { session } = await chrome.runtime.sendMessage({ type: 'get', tab: tab.id });
+    const c = document.getElementById('c');
+    const view = { w: c.clientWidth, h: c.clientHeight };
+    const tl = timeline(session);
+    const f = frame(session, tl.win.re, view, tl);
+    const g = c.getContext('2d');
+    const dpr = devicePixelRatio;
+    const { x, y, r: rad } = f.swirl;
+    const redIn = () => {
+      const d = g.getImageData(Math.round((x - rad) * dpr), Math.round((y - rad) * dpr), Math.round(2 * rad * dpr), Math.round(2 * rad * dpr)).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] > d[i + 1] + 60 && d[i] > d[i + 2] + 60) n++;
+      return n;
+    };
+    paint(g, { ...f, swirl: null });
+    const without = redIn();
+    paint(g, f);
+    const h = f.items.find((i) => i.k === 'heading' && i.s === tl.spot.key);
+    return { without, withSwirl: redIn(), key: tl.spot.key, mode: f.mode, rad, inHeading: !!h && x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h };
+  });
+  assert.equal(r.key, '宿の予約');
+  assert.equal(r.mode, 'worst_spot');
+  assert.ok(r.inHeading, '渦の中心が見出しの箱の中');
+  assert.ok(r.withSwirl - r.without >= 10, `渦の赤い画素 ${r.withSwirl} - ${r.without}（半径 ${r.rad}）`);
   await p.close();
 });
 
