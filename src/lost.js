@@ -8,8 +8,8 @@ const NEAR = 4;                         // 同じ欄と見なす箱のずれ（p
 const near = (a, b, keys) => keys.every((k) => Math.abs(a[k] - b[k]) <= NEAR);
 const boxOf = ({ x, y, w, h }) => ({ x, y, w, h });
 const headingsOf = (p) => (p.items || []).filter((it) => it.k === 'heading');
-// ページの見出し = 最初の見出しの文字。文字の無い見出し（社内の束）は区別できないので null
-const pageKey = (p) => headingsOf(p)[0]?.s || null;
+// ページの見出し = 最初の見出しの文字。文字の無い見出し（社内の束）は区別できないので null（動画の焼き込みも使う）
+export const pageKey = (p) => headingsOf(p)[0]?.s || null;
 const isFieldEv = (e) => e.k === 'focus' || e.k === 'input';
 
 // 同じ欄: 名前が同じで横の位置が同じ（作り直されて縦にずれても同じ）。名前が無ければ同じページか同じ見出しのページで同じ箱

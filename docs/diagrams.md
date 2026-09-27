@@ -25,7 +25,7 @@ stateDiagram-v2
     call_menu --> replay_fast: そのタブの右クリックの「さっきの自分を呼ぶ」
     replay_fast --> worst_spot: 一番損した 1 か所の窓に入った（1 倍に落とし、1.6 倍まで寄る）
     worst_spot --> replay_fast: 窓を抜けた（赤い渦は 1 か所のページに残す。大きさ = 損した時間）
-    replay_fast --> export_clip: 「送る」を押した
+    replay_fast --> export_clip: 「送る」を押した（開いた時に裏で作っておいた MP4。図 5）
     replay_fast --> record_session: 走り終わった・side panel を閉じた
     export_clip --> replay_fast: 共有シートかダウンロードに渡した
 ```
@@ -121,3 +121,27 @@ flowchart TD
 - 印（`([ ])` の形の節点）の集合 = `src/lost.js` が `mark('<kind>', …)` で立てる印の集合
 - 再生は worstSpot の t0〜t1 の窓に入る事象へ向かう間を 1 倍（1 つの間は 1.5 秒・窓全体で 6 秒まで）にし、渦を 1 つだけ描く
 
+## 5. 動画の書き出し（side panel を開いた時に裏で作り、「送る」で渡す）
+
+出典: `src/clip.js`・`src/sidepanel.js`・PBI-0005 G1（2026-09-27）
+
+```mermaid
+flowchart TD
+    load[load: side panel が束を読んだ。再生と並んで makeClip を始める] --> pick{pickCodec: isConfigSupported}
+    pick -- avc1.4d0028 → avc1.42001f → vp09 のどれか --> raster[raster: ページごとに 1 回。写しの資源を data: に直し、SVG の foreignObject → ImageBitmap]
+    pick -- どれも無い --> noCodec[送るは押せない: この Chrome では動画を作れません]
+    raster -- 絵に出来ない・写しが無い --> skel[そのページだけ骨組みの絵]
+    raster --> frames[冒頭 1.5 秒 + 再生 0〜total + 最後 2 秒を 30 fps で。frame の dom カメラで写しの絵を描き、paint を重ねる。冒頭と最後に captions の帯]
+    skel --> frames
+    frames -- 読み直された（もう一度・ゴースト）--> stale[stale: encoder を閉じて捨てる]
+    frames --> mux[mp4-muxer: fastStart in-memory で moov を先頭に]
+    mux --> ready[送るを押せる]
+    ready -- 押した --> canShare{canShare files?}
+    canShare -- yes --> share[navigator.share: OS の共有シート]
+    canShare -- no --> download[a download でダウンロード]
+    share -- AbortError: 利用者が閉じた --> done([何もしない])
+    share -- それ以外の失敗 --> download
+```
+
+- 動画の材料は記録（写し・事象）と、写しに在る資源の GET だけ。記録や動画を載せた送信は持たない
+- 焼き込み（`captions`）は ① 登録できるドメイン（`siteOf`）② 閉じた束の最後のページの見出し ③ 一番の迷いの窓の後の最初の名前の在る click。社内の束は 0 行

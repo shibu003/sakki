@@ -14,6 +14,8 @@
   canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
   footer { padding: 8px 14px 12px; }
   button { font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 6px; border: 1px solid #94a3b8; background: #fff; cursor: pointer; }
+  #send { background: #4f46e5; border-color: #4f46e5; color: #fff; font-weight: 600; }
+  #send:disabled { background: #e2e8f0; border-color: #cbd5e1; color: #475569; font-weight: 400; cursor: default; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -21,6 +23,7 @@
   <header><p id="status">読み込んでいます…</p></header>
   <div id="stage"><iframe id="page" sandbox="" scrolling="no" tabindex="-1" aria-hidden="true" hidden></iframe><canvas id="c" aria-label="さっきの自分の再生"></canvas></div>
   <footer>
+    <button id="send" hidden disabled>送る</button>
     <button id="again" hidden>もう一度</button>
     <button id="try" hidden>偽の手続きを開く</button>
   </footer>

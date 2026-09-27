@@ -1,7 +1,8 @@
 // 再生の純粋部分。frame(session, t, view) が表示リストを返し、paint がそれを canvas に描くだけ。
 // 写し（page.dom）の在るページは、side panel が list.dom のカメラで実際の見た目の iframe を動かし、paint はその上に ●●●・渦・ゴーストだけを重ねる。
 // 写しの無いページ（社内の束・大きすぎた・上限で捨てた）は骨組みの絵に落ちる。
-import { worstSpot } from './lost.js';
+import { worstSpot, pageKey } from './lost.js';
+import { siteOf } from './session.js';
 
 export const GHOST = { label: 'さっきの私', alpha: 0.6, color: '#4f46e5', r: 9 };
 export const FILLED = '●●●';
@@ -22,6 +23,19 @@ export const swirlRadius = (loss) => Math.min(SWIRL.max, SWIRL.min + 5 * Math.sq
 const center = (e) => ({ x: e.x + e.w / 2, y: e.y + e.h / 2 });
 const fmtDur = (ms) => (ms < 60000 ? `${Math.round(ms / 1000)} 秒` : `${Math.round(ms / 60000)} 分`);
 export const awayText = (p) => `${p.host} で ${fmtDur(p.t1 - p.t)}`;
+
+// 動画の冒頭と最後に焼き込む文字（PBI-0005）: どこで・何が終わったか・どのボタンで渦を抜けたか。無い行は省く。
+// 社内の束は 0 行（ホスト名を外へ出さない）。文字は記録に在る物（既に伏せてある）だけを使う
+export function captions(S) {
+  if (S.internal) return [];
+  const pages = S.pages.filter((p) => !p.away);
+  const lines = [siteOf(S.home ?? pages[0]?.host ?? '')];
+  if (S.phase === 'closed') lines.push(pageKey(pages.at(-1)));
+  const spot = worstSpot(S);
+  const out = spot && pages.flatMap((p) => p.evs || []).filter((e) => e.k === 'click' && e.s && e.t >= spot.t1).sort((a, b) => a.t - b.t)[0];
+  if (out) lines.push(`「${out.s}」で抜けた`);
+  return lines.filter(Boolean);
+}
 
 // 事象を時刻の順に並べ、再生の時刻 rt を振る。一番の迷いの窓（spot.t0〜t1）に入る事象へ向かう間だけ 1 倍
 export function timeline(S) {
@@ -139,7 +153,7 @@ function drawPage(list, page, pi, g, view, filled = new Set(), z = 1, sw = null)
 // ---- 描く（ctx は CanvasRenderingContext2D か OffscreenCanvasRenderingContext2D）----
 const FONT = '"Hiragino Sans", "Noto Sans JP", system-ui, sans-serif';
 
-function fitText(ctx, s, w) {
+export function fitText(ctx, s, w) {
   if (ctx.measureText(s).width <= w) return s;
   let lo = 0, hi = s.length;
   while (lo < hi) {

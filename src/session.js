@@ -10,7 +10,8 @@ const TWO_LEVEL = new Set([
 ]);
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 
-// 登録できるドメインの近似。ponytail: 末尾 2 ラベル＋2 段の接尾辞の小さな表。PSL は W4 の焼き込み（PBI-0005）で入れる
+// 登録できるドメインの近似（動画の焼き込みも使う）。ponytail: 末尾 2 ラベル＋2 段の接尾辞の小さな表。
+// github.io のような私的な接尾辞では 1 段上（foo.github.io → github.io）に出る。外れが実際に出たら Public Suffix List（約 230KB）を入れる
 export function siteOf(host) {
   if (!host.includes('.') || IPV4.test(host)) return host;
   const l = host.split('.');

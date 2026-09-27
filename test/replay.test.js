@@ -1,7 +1,7 @@
 // 再生の純粋部分（AC-1 ②・AC-2・AC-5）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { timeline, frame, paint, GHOST, FILLED, awayText } from '../src/replay.js';
+import { timeline, frame, paint, GHOST, FILLED, awayText, captions } from '../src/replay.js';
 
 const nameBox = { x: 100, y: 100, w: 200, h: 30 };
 const dayBox = { x: 100, y: 200, w: 200, h: 30 };
@@ -121,4 +121,29 @@ test('replay: 写しの在るページは iframe のカメラを返し、paint �
   assert.ok(!calls.some(([k, ...xs]) => k === 'fillRect' && xs[0] === 0 && xs[1] === 0 && xs[2] === view.w), '背景を塗らない');
   assert.ok(calls.some(([k, v]) => k === 'fillText' && v === FILLED), '入れた欄に ●●●');
   assert.ok(!calls.some(([k, v]) => k === 'fillText' && v === '予約する'), '骨組みのボタン名は描かない');
+});
+
+// 焼き込み（PBI-0005 AC-3）: 渦の在る手続きを完了まで。選び直しの窓の後、名前の無い click を飛ばして最初の名前の在る click
+test('replay: 焼き込みは ドメイン・完了の見出し・渦を抜けたボタン。無い行は省き、社内の束は 0 行（PBI-0005 AC-3）', () => {
+  const day = { x: 100, y: 200, w: 200, h: 30, s: '泊まる日' };
+  const lost = (picks, phase = 'closed', extra = {}) => ({
+    phase, home: 'www.booking.co.jp', internal: false, ...extra,
+    pages: [
+      { host: 'www.booking.co.jp', items: [{ k: 'heading', x: 0, y: 40, w: 400, h: 30, s: '宿の予約' }],
+        evs: [
+          { t: 500, k: 'click', x: 0, y: 90, w: 120, h: 40, s: '空室を見る' }, // 窓の前の名前の在る click は数えない
+          ...picks.map((t) => ({ t, k: 'input', ...day, p: 1 })),
+          { t: 5000, k: 'click', x: 0, y: 0, w: 10, h: 10 },
+          { t: 6000, k: 'click', x: 100, y: 400, w: 120, h: 40, s: '予約する', pr: 1 },
+        ] },
+      { host: 'www.booking.co.jp', items: [{ k: 'heading', x: 0, y: 40, w: 400, h: 30, s: '予約内容の確認' }], evs: [{ t: 7000, k: 'click', x: 0, y: 90, w: 120, h: 40, s: '予約を確定する', pr: 1 }] },
+      { away: true, host: 'pay.test', t: 7500, t1: 8000 },
+      { host: 'www.booking.co.jp', items: [{ k: 'heading', x: 0, y: 40, w: 400, h: 30, s: '予約が完了しました' }], evs: [] },
+    ],
+  });
+  assert.deepEqual(captions(lost([1000, 2000, 3000])), ['booking.co.jp', '予約が完了しました', '「予約する」で抜けた']);
+  assert.deepEqual(captions(lost([1000])), ['booking.co.jp', '予約が完了しました'], '渦が無い = 3 行目なし');
+  assert.deepEqual(captions(lost([1000, 2000, 3000], 'homed')), ['booking.co.jp', '「予約する」で抜けた'], '閉じていない = 2 行目なし');
+  assert.deepEqual(captions(lost([1000, 2000, 3000], 'closed', { internal: true })), [], '社内の束');
+  assert.deepEqual(captions(lost([1000, 2000, 3000], 'prelude', { home: null })), ['booking.co.jp', '「予約する」で抜けた'], '本拠が決まる前は最初のページのホスト');
 });

@@ -494,6 +494,136 @@ test('e2e: 確認画面は弱い合図、完了画面の空いた角にゴース
   assert.equal(await callableOf(p), true, '引っ込んだ後も右クリックで呼べる');
 });
 
+// 前の検査の束（泊まる日を 3 回選び直し、完了の画面まで = 一番新しい束）を動画にする。
+// side panel の navigator.share は差し替えて File を受け（headless でも canShare は true）、VideoEncoder は数える
+test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シートに渡る・無ければダウンロード（PBI-0005 通し AC-1〜4・AC-X1〜X3）', async () => {
+  const p = await ctx.newPage();
+  await p.addInitScript(() => {
+    window.__shared = [];
+    let fail = null;
+    window.__shareFails = (name) => { fail = name; };
+    navigator.share = async (d) => { if (fail) throw new DOMException('x', fail); window.__shared.push(d.files[0]); };
+    const E = window.VideoEncoder;
+    window.__encs = [];
+    window.VideoEncoder = class extends E {
+      constructor(o) { super(o); this.n = 0; window.__encs.push(this); }
+      encode(f, o) { this.n++; return super.encode(f, o); }
+      close() { this.closedAt = this.n; return super.close(); }
+    };
+  });
+  const reqs = [];
+  p.on('request', (r) => reqs.push({ method: r.method(), url: r.url() }));
+  await p.setViewportSize({ width: 360, height: 640 });
+  await p.goto(`chrome-extension://${extId}/sidepanel.html`);
+  // AC-X3: 作っている途中で読み直す（もう一度・ゴーストが押された時と同じ load）→ 前の encoder は途中で閉じる
+  await p.waitForFunction(() => window.__encs[0]?.n > 5, null, { timeout: 60000 });
+  assert.equal(await p.$eval('#send', (b) => [b.hidden, b.disabled, b.textContent].join('|')), 'false|true|動画を作っています…');
+  await p.evaluate(() => document.getElementById('again').click());
+  await p.waitForFunction(() => !document.getElementById('send').disabled, null, { timeout: 180000 });
+  assert.equal(await p.textContent('#send'), '送る');
+  const encs = await p.evaluate(() => window.__encs.map((e) => ({ n: e.n, closedAt: e.closedAt })));
+  assert.equal(encs.length, 2, JSON.stringify(encs));
+  assert.ok(encs[0].closedAt != null && encs[0].closedAt < encs[1].n, `前の encoder は途中で閉じた: ${JSON.stringify(encs)}`);
+  // AC-1: 押すと共有シートに MP4 が 1 本。ftyp が先頭・moov が mdat より前（チャットの streaming 再生）・H.264
+  await p.click('#send');
+  await p.waitForFunction(() => window.__shared.length === 1, null, { timeout: 5000 });
+  const info = await p.evaluate(async () => {
+    const f = window.__shared[0];
+    const b = new Uint8Array(await f.arrayBuffer());
+    const find = (s) => { for (let i = 0; i + 4 <= b.length; i++) if (b[i] === s.charCodeAt(0) && b[i + 1] === s.charCodeAt(1) && b[i + 2] === s.charCodeAt(2) && b[i + 3] === s.charCodeAt(3)) return i; return -1; };
+    return { name: f.name, type: f.type, size: b.length, ftyp: find('ftyp'), moov: find('moov'), mdat: find('mdat'), avc1: find('avc1') };
+  });
+  assert.equal(info.name, 'sakki-booking.test.mp4');
+  assert.equal(info.type, 'video/mp4');
+  assert.equal(info.ftyp, 4, 'ftyp が先頭');
+  assert.ok(info.moov > 0 && info.moov < info.mdat, `moov ${info.moov} が mdat ${info.mdat} より前`);
+  assert.ok(info.avc1 > 0, 'H.264');
+  // AC-2・AC-3: Chrome の video で開いてシークし、画素を見る（1 枚ごとの位置は同じ frame() で出す）
+  const seen = await p.evaluate(async () => {
+    const { timeline, frame, captions } = await import('./src/replay.js');
+    const { VIEW, INTRO, OUTRO } = await import('./src/clip.js');
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const { session: S } = await chrome.runtime.sendMessage({ type: 'get', tab: tab.id });
+    const tl = timeline(S);
+    const v = document.createElement('video');
+    v.muted = true;
+    v.src = URL.createObjectURL(window.__shared[0]);
+    await new Promise((ok, ng) => { v.onloadeddata = ok; v.onerror = () => ng(new Error(`video: ${v.error?.message}`)); });
+    const g = new OffscreenCanvas(720, 1280).getContext('2d', { willReadFrequently: true });
+    // 再生の時刻 t を含む 1 枚へ（1 枚の真ん中にシーク）。返り値 = その 1 枚が描いた再生の時刻
+    const seek = async (t) => {
+      const i = Math.floor(((INTRO + t) * 30) / 1000);
+      v.currentTime = (i + 0.5) / 30;
+      await new Promise((r) => { v.onseeked = r; });
+      g.drawImage(v, 0, 0, 720, 1280);
+      return (i * 1000) / 30 - INTRO;
+    };
+    const px = (x, y) => [...g.getImageData(Math.round(x), Math.round(y), 1, 1).data].slice(0, 3);
+    const count = (x, y, w, h, hit) => { const d = g.getImageData(Math.round(x), Math.round(y), Math.round(w), Math.round(h)).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (hit(d[i], d[i + 1], d[i + 2])) n++; return n; };
+    const orange = (r, gg, b) => Math.abs(r - 249) < 30 && Math.abs(gg - 115) < 30 && Math.abs(b - 22) < 40;
+    const red = (r, gg, b) => r > 150 && r - gg > 80 && Math.abs(gg - b) < 40; // 渦（#dc2626）。橙の写真・琥珀のボタンは g と b が離れている
+    // 冒頭（1 枚目 = サムネ）: 実際の見た目の header と写真、下端の帯
+    const f0 = frame(S, 0, VIEW, tl);
+    await seek(-INTRO / 2);
+    const intro = { header: px((600 * f0.dom.scale - f0.dom.x) * 2, (24 * f0.dom.scale - f0.dom.y) * 2), photo: count(0, 0, 720, 1280, orange), band: px(10, 1272) };
+    // 途中: ゴースト（4 つ目の事象の時刻）
+    const tg = await seek(tl.steps[3].rt);
+    const fg = frame(S, tg, VIEW, tl);
+    const ghost = px(fg.ghost.x * 2, fg.ghost.y * 2);
+    // 渦の窓の終わり: 渦の円の中の赤
+    const tw = await seek(tl.win.re);
+    const sw = frame(S, tw, VIEW, tl).swirl;
+    const swirlRed = sw ? count((sw.x - sw.r) * 2, (sw.y - sw.r) * 2, sw.r * 4, sw.r * 4, red) : -1;
+    // 最後: 完了の画面の写しの上端（header）と帯
+    await seek(tl.total + OUTRO - 100);
+    const endPage = S.pages.findLast((x) => !x.away);
+    const end = { header: px(600, 24 * (VIEW.w / endPage.vw) * 2), band: px(10, 1272), done: !!endPage.dom };
+    return { dur: v.duration, want: (INTRO + tl.total + OUTRO) / 1000, intro, ghost, swirlRed, end, lines: captions(S), doms: S.pages.map((x) => x.dom || '').join('\n') };
+  });
+  assert.ok(Math.abs(seen.dur - seen.want) < 0.1, `長さ ${seen.dur} 秒 ≒ 冒頭＋再生＋最後 ${seen.want} 秒`);
+  assert.deepEqual(seen.lines, ['booking.test', '予約が完了しました', '「予約する」で抜けた'], '焼き込みの 3 行（AC-3）');
+  assert.ok(near(seen.intro.header, [15, 118, 110], 40), `冒頭: 実際の header の色 ${seen.intro.header}`);
+  assert.ok(seen.intro.photo >= 200, `冒頭: 実際の写真（data: に直した画像）の橙の画素 ${seen.intro.photo}`);
+  assert.ok(near(seen.intro.band, [15, 23, 42], 30), `冒頭: 焼き込みの帯 ${seen.intro.band}`);
+  assert.ok(seen.ghost[2] > seen.ghost[0] + 40 && seen.ghost[2] > seen.ghost[1] + 40, `途中: ゴーストの青紫 ${seen.ghost}`);
+  assert.ok(seen.swirlRed >= 10, `渦の窓の終わり: 赤い渦の画素 ${seen.swirlRed}`);
+  assert.ok(seen.end.done, '完了の画面の写しが在る');
+  assert.ok(near(seen.end.header, [15, 118, 110], 40), `最後: 完了の画面の header ${seen.end.header}`);
+  assert.ok(near(seen.end.band, [15, 23, 42], 30), `最後: 焼き込みの帯 ${seen.end.band}`);
+  // AC-X2 ④ の手前: XML にならない属性・要素・制御文字が在っても、写しは絵になる（1 つで SVG ごと読めなくなる）
+  const xmlish = await p.evaluate(async () => {
+    const { raster } = await import('./src/clip.js');
+    const dom = '<!doctype html><html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ja"><body style="margin:0"><div x-on:click="a" @click="b" :class="c" xlink:href="#" style="background:#dc2626;width:40px;height:40px"></div><o:p>文\u000b</o:p><svg width="10" height="10"><use xlink:href="#a"/></svg></body></html>';
+    const b = await raster({ dom, vw: 100, vh: 100 }, { data: async () => null, text: async () => null });
+    const g = new OffscreenCanvas(100, 100).getContext('2d');
+    g.drawImage(b, 0, 0);
+    return [...g.getImageData(20, 20, 1, 1).data].slice(0, 3);
+  });
+  assert.deepEqual(xmlish, [220, 38, 38], 'x-on:click・@click・:class・html の xmlns・o:p・制御文字の在る写しも絵になる');
+  // AC-4: 通信は全部 GET で、拡張の中か写しに在る資源だけ（記録・動画を載せた送信は 0 本）
+  const odd = reqs.filter((r) => r.method !== 'GET' || !(r.url.startsWith(`chrome-extension://${extId}/`) || r.url.startsWith('data:') || seen.doms.includes(r.url)));
+  assert.deepEqual(odd, [], '写しの外への通信');
+  // AC-X1: 共有シートの無い Chrome → 同じ MP4 がダウンロード
+  await p.evaluate(() => { navigator.canShare = () => false; });
+  const [dl] = await Promise.all([p.waitForEvent('download', { timeout: 10000 }), p.click('#send')]);
+  assert.equal(dl.suggestedFilename(), 'sakki-booking.test.mp4');
+  assert.equal(fs.statSync(await dl.path()).size, info.size);
+  // AC-X2 ①: 利用者が共有シートを閉じた → 何もしない ② 他の理由で失敗 → ダウンロード
+  await p.evaluate(() => { delete navigator.canShare; window.__shareFails('AbortError'); });
+  let dls = 0;
+  const onDl = () => dls++;
+  p.on('download', onDl);
+  await p.click('#send');
+  await sleep(1500);
+  p.off('download', onDl);
+  assert.equal(dls, 0, '閉じた時はダウンロードしない');
+  await p.evaluate(() => window.__shareFails('NotAllowedError'));
+  const [dl2] = await Promise.all([p.waitForEvent('download', { timeout: 10000 }), p.click('#send')]);
+  assert.equal(dl2.suggestedFilename(), 'sakki-booking.test.mp4');
+  assert.equal(await p.evaluate(() => window.__shared.length), 1, '共有シートに渡ったのは最初の 1 回だけ');
+  await p.close();
+});
+
 test('e2e: 迷いの無い手続きの完了では何も出ない（PBI-0004 AC-2）', async () => {
   const p = await newTab();
   await p.goto(url('booking', 'booking.html'));
