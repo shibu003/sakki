@@ -1,0 +1,25 @@
+# 開発メモ（public repo には置かない）
+task/
+backlog/
+docs/internal/
+*_PLAN.md
+*_ROADMAP.md
+*_AUDIT.md
+SCORECARD.md
+STATUS.md
+PROJECT.md
+CLAUDE.md
+AGENTS.md
+.claude/
+arc.md
+task.md
+*.log
+
+# 個人情報・ローカル環境
+.env*
+*.db
+*.sqlite*
+
+# build
+node_modules/
+dist/
