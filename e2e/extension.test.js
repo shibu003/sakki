@@ -496,7 +496,7 @@ test('e2e: 確認画面は弱い合図、完了画面の空いた角にゴース
 
 // 前の検査の束（泊まる日を 3 回選び直し、完了の画面まで = 一番新しい束）を動画にする。
 // side panel の navigator.share は差し替えて File を受け（headless でも canShare は true）、VideoEncoder は数える
-test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シートに渡る・無ければダウンロード（PBI-0005 通し AC-1〜4・AC-X1〜X3）', async () => {
+test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シートに渡る・無ければダウンロード（PBI-0005 通し AC-1〜4・AC-X1〜X3）', async (t) => {
   const p = await ctx.newPage();
   await p.addInitScript(() => {
     window.__shared = [];
@@ -531,13 +531,19 @@ test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シ�
     const f = window.__shared[0];
     const b = new Uint8Array(await f.arrayBuffer());
     const find = (s) => { for (let i = 0; i + 4 <= b.length; i++) if (b[i] === s.charCodeAt(0) && b[i + 1] === s.charCodeAt(1) && b[i + 2] === s.charCodeAt(2) && b[i + 3] === s.charCodeAt(3)) return i; return -1; };
-    return { name: f.name, type: f.type, size: b.length, ftyp: find('ftyp'), moov: find('moov'), mdat: find('mdat'), avc1: find('avc1') };
+    // この Chrome に H.264 の encoder が在るか（clip.js の configOf と同じ形で。CI の linux の Chrome for Testing には無い事がある）
+    const h264 = (await Promise.all(['avc1.4d0028', 'avc1.42001f'].map((codec) => VideoEncoder.isConfigSupported({ codec, width: 720, height: 1280, bitrate: 2e6, framerate: 30, avc: { format: 'avc' } }).then((r) => r.supported, () => false)))).some(Boolean);
+    return { name: f.name, type: f.type, size: b.length, ftyp: find('ftyp'), moov: find('moov'), mdat: find('mdat'), avc1: find('avc1'), vp09: find('vp09'), h264 };
   });
   assert.equal(info.name, 'sakki-booking.test.mp4');
   assert.equal(info.type, 'video/mp4');
   assert.equal(info.ftyp, 4, 'ftyp が先頭');
   assert.ok(info.moov > 0 && info.moov < info.mdat, `moov ${info.moov} が mdat ${info.mdat} より前`);
-  assert.ok(info.avc1 > 0, 'H.264');
+  if (info.h264) assert.ok(info.avc1 > 0, 'H.264');
+  else { // clip.js の CODECS の順で VP9 に落ちる。落ちずに確かめ、訳を TAP に残す
+    assert.ok(info.vp09 > 0 && info.avc1 < 0, `H.264 の無い Chrome では VP9: ${JSON.stringify(info)}`);
+    t.diagnostic('この Chrome には H.264 の encoder が無い → VP9 の MP4 を確かめた。iPhone・LINE で再生できるか（H.264 の道）はこの run では測っていない');
+  }
   // AC-2・AC-3: Chrome の video で開いてシークし、画素を見る（1 枚ごとの位置は同じ frame() で出す）
   const seen = await p.evaluate(async () => {
     const { timeline, frame, captions } = await import('./src/replay.js');

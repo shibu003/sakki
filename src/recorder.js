@@ -5,7 +5,7 @@
   'use strict';
   if (globalThis.__sakkiBooted || typeof document === 'undefined' || !globalThis.chrome?.storage) return;
   globalThis.__sakkiBooted = true; // scripting で差し直された時に二重に動かない
-  const { mask, remember: toMemo, TEXT_ATTR } = globalThis.sakki;
+  const { mask, remember: toMemo, normalize, TEXT_ATTR } = globalThis.sakki;
 
   const MAX_ITEMS = 600;
   const MAX_NODES = 20000; // ponytail: 大きなページは先頭から 2 万要素まで。足りなければ見える範囲に絞る
@@ -59,13 +59,16 @@
     if (tag(el) === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox')) return true;
     return CHOICE_ROLES.test(role(el)) || el.hasAttribute('aria-pressed') || el.hasAttribute('aria-checked') || el.hasAttribute('aria-selected');
   }
+  // 自作の選び物（Headless UI の Listbox など）: 選んだ物の文字をボタンの中に出す = 欄（中の文字が値）。押すボタンとは数えない
+  const isPicker = (el) => (el.getAttribute('aria-haspopup') || '').toLowerCase() === 'listbox';
   function isField(el) {
     const t = tag(el);
     if (t === 'INPUT') return !NOT_FIELD_INPUTS.has(el.type);
     if (t === 'TEXTAREA' || t === 'SELECT') return true;
-    return el.isContentEditable && !el.parentElement?.isContentEditable || FIELD_ROLES.test(role(el));
+    return el.isContentEditable && !el.parentElement?.isContentEditable || FIELD_ROLES.test(role(el)) || isPicker(el);
   }
   function isButton(el) {
+    if (isPicker(el)) return false;
     const t = tag(el);
     if (t === 'BUTTON' || t === 'SUMMARY') return true;
     if (t === 'INPUT') return ['submit', 'button', 'reset', 'image'].includes(el.type);
@@ -94,18 +97,19 @@
     walkText(el);
     return text(s);
   }
-  // label の文字。中に入れた select の選択肢・textarea の初めの文字は値なので混ぜない（PBI-0006）
+  // label の文字。中に入れた select の選択肢・textarea の初めの文字・自作の選び物で選んだ文字は値なので混ぜない（PBI-0006・PBI-0009）
   function labelText(el) {
     let s = '';
     const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    for (let n = tw.nextNode(); n; n = tw.nextNode()) if (!n.parentElement?.closest('select,textarea,datalist')) s += n.nodeValue;
+    for (let n = tw.nextNode(); n; n = tw.nextNode()) if (!n.parentElement?.closest('select,textarea,datalist,[aria-haspopup="listbox" i]')) s += n.nodeValue;
     return s;
   }
   function fieldName(el) {
     const by = el.getAttribute('aria-labelledby');
     if (by) {
       const root = el.getRootNode();
-      const s = text(by.split(/\s+/).map((id) => { const l = root.getElementById?.(id) || document.getElementById(id); return l ? labelText(l) : ''; }).join(' '));
+      // 自分を指す id は飛ばす（Headless UI は aria-labelledby="<label> <自分>" と書く = 自分の中の文字は選んだ値）
+      const s = text(by.split(/\s+/).map((id) => { const l = root.getElementById?.(id) || document.getElementById(id); return l && l !== el ? labelText(l) : ''; }).join(' '));
       if (s) return s;
     }
     if (el.getAttribute('aria-label')) return text(el.getAttribute('aria-label'));
@@ -249,15 +253,19 @@
     if (mode === 'show_ghost') mode = 'record_session';
   }
 
-  const hasValue = (el) => (tag(el) === 'SELECT' ? el.value !== '' : el.isContentEditable ? !!text(el.textContent) : !!el.value);
+  // 欄の値: select は選んだ物の文字、input・textarea は value、ほか（contenteditable・role=textbox・自作の選び物）は中の文字
+  const valueOf = (el) => { const t = tag(el); return t === 'SELECT' ? el.options[el.selectedIndex]?.text : t === 'INPUT' || t === 'TEXTAREA' ? el.value : el.textContent; };
+  const hasValue = (el) => (tag(el) === 'SELECT' ? el.value !== '' : !!text(valueOf(el)));
 
   // ---- 覚える集まり ----
-  function remember(value, name) {
+  // name = 名前の欄（空白で割った片も、長さを問わず）。whole = 自作の選び物の文字: 置き文字（「選択してください」）と値を見分けられないので、
+  // 3 文字片にせず値まるごとで覚える（3 文字片だと「ください」が全部の文で伏せる）。2 文字以下はまるごと一致（select と同じ天井）
+  function remember(value, name, whole) {
     const v = text(value);
     if (!v) return;
     const parts = name ? [v, ...v.split(/[\s　]+/)] : [v];
     for (const p of parts) {
-      for (const m of toMemo(p, { seed: ctx.seed, name })) if (!ctx.memo.has(m)) { ctx.memo.add(m); pendingMemo.push(m); }
+      for (const m of toMemo(p, { seed: ctx.seed, name: name || (whole && normalize(p).s.length >= 3) })) if (!ctx.memo.has(m)) { ctx.memo.add(m); pendingMemo.push(m); }
     }
   }
   // 今のページの値を全部集まりへ入れる（骨組みの文字を取る前に必ず呼ぶ）
@@ -267,9 +275,9 @@
       if (inBand(el)) bandTexts(el); // 帯の中の欄の値も入れるので、中へは降りる
       const t = tag(el);
       if (isField(el) && hasValue(el)) {
-        const v = t === 'SELECT' ? el.options[el.selectedIndex]?.text : el.isContentEditable ? el.textContent : el.value;
+        const v = valueOf(el);
         const name = t !== 'SELECT' && isNameField(el);
-        remember(v, name);
+        remember(v, name, t !== 'INPUT' && isPicker(el));
         if (name) names.push(text(v));
       }
       if (t === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox') && el.checked) remember(fieldName(el), false);
@@ -573,7 +581,9 @@
     const box = el ? rectOf(el) : { x: Math.round(e.clientX + scrollX) - 8, y: Math.round(e.clientY + scrollY) - 8, w: 16, h: 16 };
     const name = el && isSubmit(el) ? buttonName(el) : '';
     const press = !!el && isPress(el);
-    record(() => ({ type: 'ev', k: 'click', ...box, s: name && !ctx.noText ? mask(name, ctx.memo, ctx.seed) : undefined, pr: press ? 1 : undefined }));
+    // 押した瞬間の値も集まりへ（自作の選び物は input を出さないので、選んだ文字が次の画面に出る前に覚える所がここしか無い）
+    // ponytail: click ごとに文書を 1 回歩く（2 万要素まで）。重ければ選び物を押した後の最初の click だけにする
+    record(() => { collectValues(); return { type: 'ev', k: 'click', ...box, s: name && !ctx.noText ? mask(name, ctx.memo, ctx.seed) : undefined, pr: press ? 1 : undefined }; });
     if (press) watchPress(formOf(el));             // ① 押した form が消えるか
     else if (el && isDownload(el)) signal(judge()); // ② 控えのダウンロード・PDF
   }

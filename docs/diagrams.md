@@ -31,6 +31,7 @@ stateDiagram-v2
 ```
 
 - 入口は拡張のアイコン 1 つ（popup は持たない）。押すと side panel が開く
+- 記録を読む口（`get`）は拡張のページにだけ答える（`sender.url` が `chrome-extension://<自分>/`）。content script（乗っ取られた renderer）からは読めない
 - 記録は `chrome.storage.session`（メモリだけ）。外へ送る経路は持たない
 - 迷いは記録中の状態ではなく、記録から後で計算する（図 4）。再生・完了（W3）・動画（W4）が同じ関数を呼ぶ
 - 合図の強さは 1 本の `judge`（main に押せる送信ボタンが残るか）。偽の手続きも同じ道で完了する（専用の道を持たない）
@@ -77,7 +78,7 @@ flowchart TD
     noText -- yes: 文字なし --> pushItem[pushItem: 箱と伏せた文字を骨組みに足す]
     noText -- no --> mask[mask: 覚える集まりの一致と、数字・メールの形を ■ に]
     mask --> pushItem
-    remember[remember: 値・選んだ物・帯の文字の hash] -.-> mask
+    remember[remember: 値・選んだ物・帯の文字の hash。自作の選び物の文字は値まるごと（置き文字の 3 文字片で文を伏せない）] -.-> mask
 ```
 
 ```mermaid
@@ -89,14 +90,15 @@ flowchart TD
     skip -- no --> boxed{よその枠・canvas・動画・音声・object?}
     boxed -- yes --> grey[同じ大きさの灰色の箱]
     boxed -- no --> field{欄の中身?}
-    field -- 文字の欄・select・textarea・contenteditable --> filled[値があれば ●●●。日付・数の欄は text にして ●●●]
+    field -- 文字の欄・select・textarea・contenteditable・自作の選び物（aria-haspopup=listbox） --> filled[値があれば ●●●。日付・数の欄は text にして ●●●]
     field -- no --> choice{選べる物の中の文字・radio と checkbox の label?}
     choice -- yes --> allmask[全部 ■。選んだ物だけ伏せると、残った方で選んだ物が分かる]
     choice -- no --> mask
     copyPage -.-> css[CSS: CSSOM から取り、相対 url を絶対に、vh を記録時の px に。読めない stylesheet は link のまま]
 ```
 
-- 骨組みと写しを取る前に、今のページの値を全部 remember に入れる（取った後に消す 2 本目は持たない）
+- 骨組みと写しを取る前と、押した（click）瞬間に、今のページの値を全部 remember に入れる（取った後に消す 2 本目は持たない。自作の選び物は input を出さないので、押した瞬間が次の画面より前に覚える所）
+- 自作の選び物（`aria-haspopup=listbox`。Headless UI の Listbox など）は欄: 名前は label から取り（自分を指す aria-labelledby と中の文字は飛ばす）、中の文字は値
 - 覚える集まりが後から育ったら（1 ページ目の本文に出ていた名前を 2 ページ目で初めて打った）、reducer の addMemo が前に取った骨組み・事象・写しの文字にも**同じ mask** を新しい分だけ当て直す（規則は 1 本のまま。見える属性の一覧 TEXT_ATTR も redact.js の 1 本を recorder と session が読む）
 - 本文・見出し・ボタン・見える属性（alt・title・placeholder・datetime・download・aria-・data-）の文字は mask を通して実際のまま。資源の URL（画像・CSS）は再生で読み直すので残し、ページ自身の URL（パスとクエリ）は残さない（空の URL は写さない）
 - 取るのは focus・click・input の瞬間だけ。最初の focus か click までは何も送らない

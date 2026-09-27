@@ -1,0 +1,83 @@
+# E2E を手元の機械の外で回す（PBI-0009）。拡張を Chrome for Testing（playwright-core と同じ版）の headless に読ませ、
+# 題材のページを実際に操作する。変異（e2e/mutate-dom.sh）は base が赤い・生き残りが 1 つでも在れば落ちる。
+# 下見の step が「ubuntu の headless に拡張が載るか」「H.264 の encoder が在るか」を job の summary に書く。
+name: e2e
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120 # 未測。変異は 1 つごとに Chrome を起こし、動画の変異は MP4 を待つ（1 本 180 秒まで）
+    defaults:
+      run:
+        shell: bash # -eo pipefail（tee の後ろでも落ちた事が消えない）
+    env:
+      OUT: ${{ runner.temp }}/mutate
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26 # E2E を書いた機械と同じ
+          cache: npm
+      - run: npm ci
+      - name: Chrome for Testing と OS の依存
+        run: npx playwright-core install --with-deps chromium
+      - name: unit
+        run: npm test
+      - name: 下見 — headless に拡張が載るか・動画の codec
+        run: |
+          node --input-type=module <<'JS' | tee -a "$GITHUB_STEP_SUMMARY"
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          import { chromium } from 'playwright-core';
+          const ROOT = process.cwd();
+          const ctx = await chromium.launchPersistentContext(fs.mkdtempSync(path.join(os.tmpdir(), 'sakki-probe-')), {
+            channel: 'chromium', headless: true, args: [`--disable-extensions-except=${ROOT}`, `--load-extension=${ROOT}`],
+          });
+          console.log('### 下見');
+          const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 20000 }).catch(() => null));
+          if (!sw) {
+            console.log('- 拡張: **載らなかった**（20 秒待っても service worker が起きない）。E2E は before の serviceworker 待ちで落ちる');
+            await ctx.close();
+            process.exit(1);
+          }
+          const id = new URL(sw.url()).host;
+          const p = await ctx.newPage();
+          await p.goto(`chrome-extension://${id}/ghost.html`);
+          // clip.js の CODECS と configOf と同じ形
+          const got = await p.evaluate(() => Promise.all(['avc1.4d0028', 'avc1.42001f', 'vp09.00.10.08'].map(async (codec) => {
+            const cfg = { codec, width: 720, height: 1280, bitrate: 2e6, framerate: 30, ...(codec.startsWith('avc1') ? { avc: { format: 'avc' } } : {}) };
+            return [codec, typeof VideoEncoder !== 'undefined' && !!(await VideoEncoder.isConfigSupported(cfg).catch(() => null))?.supported];
+          })));
+          console.log(`- 拡張: 載った（chrome-extension://${id}）・${await p.evaluate(() => navigator.userAgent)}`);
+          console.log('\n| codec | 使えるか |\n|---|---|');
+          for (const [c, ok] of got) console.log(`| ${c} | ${ok ? '○' : '×'} |`);
+          const h264 = got.slice(0, 2).some(([, ok]) => ok), vp9 = got[2][1];
+          console.log(h264 ? '\n→ H.264 在り: 「送る」は H.264 の MP4。E2E（PBI-0005）は avc1 を確かめる'
+            : vp9 ? '\n→ **H.264 無し**: 「送る」は VP9 の MP4 に落ちる。E2E（PBI-0005）は落ちずに VP9 を確かめ、TAP に「# この Chrome には H.264 の encoder が無い…」を残す（iPhone・LINE で開けるかは未測）'
+            : '\n→ **H.264 も VP9 も無し**: 「送る」は「この Chrome では動画を作れません」。E2E（PBI-0005）の MP4 の検査は赤くなる（実装の破れではなく runner の前提の不在）');
+          await ctx.close();
+          process.exit(0);
+          JS
+      - name: E2E
+        run: npm run e2e
+      - name: 変異（DOM の負の対照）
+        run: |
+          set +e
+          bash e2e/mutate-dom.sh > "$RUNNER_TEMP/mutate.txt" 2>&1
+          s=$?
+          cat "$RUNNER_TEMP/mutate.txt"
+          { echo '### 変異（DOM の負の対照）'; echo '```'; cat "$RUNNER_TEMP/mutate.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $s
+      - name: 変異の TAP（落ちた時）
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutate-tap
+          path: ${{ runner.temp }}/mutate/*.tap
+          if-no-files-found: ignore

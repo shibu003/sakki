@@ -155,6 +155,46 @@ test('review 攻撃: 1 ページ目の本文に出ていた名前を 2 ページ
   await p.close();
 });
 
+// PBI-0009 ②: Headless UI の Listbox の形。選んだ「小児科」は input を出さず、ボタンの中の文字になる。「佐藤医師」は開いた時から選んである
+test('review 攻撃: 自作の選び物（aria-haspopup=listbox のボタン）で選んだ文字は、欄の中も focus の名前も次の画面も伏せ、置き文字で文を伏せない', async () => {
+  const p = await newPage();
+  await p.goto(url('pick', 'rv-picker.html'));
+  await p.click('#dept');
+  await waitFor(async () => findSession(await readState(), 'pick.test')?.pages[0]?.dom, '選ぶ前の 1 ページ目の写し（置き文字の「選択してください」が出ている）');
+  await p.click('#opts [role=option]:nth-child(2)');
+  assert.equal(await p.textContent('#dept'), '小児科');
+  await Promise.all([p.waitForURL(/rv-picked/), p.click('#go')]);
+  const S = await waitFor(async () => { const x = findSession(await readState(), 'pick.test'); return x?.pages[1]?.dom ? x : null; }, '確認の画面の写し');
+  const all = stringsOf(S);
+  for (const w of ['小児科', '佐藤', '医師', '現地払い']) assert.ok(!all.includes(w), `記録に「${w}」`);
+  const [p1, p2] = S.pages;
+  assert.deepEqual(p1.items.filter((i) => i.k === 'field').map((i) => [i.s, i.v]), [['診療科', 1], ['担当医', 1], ['支払い', 1]], '選び物は欄（名前だけ・値は ●●●。label の中の選んだ文字を名前に混ぜない）');
+  assert.deepEqual(p1.items.filter((i) => i.k === 'button').map((i) => i.s), ['確認へ進む'], '選び物をボタンに数えない');
+  assert.deepEqual(p1.evs.filter((e) => e.k === 'click' && e.pr).length, 1, '一覧を開いただけでは「押した」にしない（押したのは「確認へ進む」だけ）');
+  const focus = p1.evs.filter((e) => e.k === 'focus').map((e) => e.s);
+  assert.ok(focus.length >= 2 && focus.every((s) => s === '診療科'), `選んだ後に focus が戻っても名前に値が混ざらない: ${JSON.stringify(focus)}`);
+  assert.ok(p1.dom.includes('●●●</button>') && p1.dom.includes('受付で確認してください'), '写しの選び物は ●●●・置き文字の「選択してください」で本文の「ください」を伏せない');
+  assert.ok(p2.dom.includes('<dd>■■■</dd>') && p2.dom.includes('<dd>■■■■</dd>') && p2.dom.includes('■■■の■■■■が担当します'), '次の画面で伏せる');
+  assert.ok(p2.dom.includes('受付で確認してください'), '次の画面の文も伏せすぎない');
+  await p.close();
+});
+
+// PBI-0009 ①: 乗っ取られた renderer = content script の世界で好きな script が走る。get は今のタブに記録が無ければ一番新しい束を返すので、どのタブからでも読めていた
+test('review 攻撃: content script から get を送っても記録は返らず、拡張のページ（タブで開いても）には返る', async () => {
+  const p = await newPage();
+  await p.goto(url('evil', 'rv-welcome.html'));
+  const tabId = await sw.evaluate(async (u) => (await chrome.tabs.query({})).find((t) => t.url === u)?.id, p.url());
+  assert.ok(tabId != null, 'よそのページのタブ');
+  const [r] = await sw.evaluate((tabId) => chrome.scripting.executeScript({ target: { tabId }, func: () => chrome.runtime.sendMessage({ type: 'get' }) }), tabId);
+  assert.ok(r.result == null, `content script に返した: ${JSON.stringify(r.result)?.slice(0, 200)}`);
+  const ext = await newPage();
+  await ext.goto(`chrome-extension://${extId}/ghost.html`);
+  const own = await ext.evaluate(() => chrome.runtime.sendMessage({ type: 'get' }));
+  assert.ok(own?.consented && own.session, '拡張のページには返る（負の対照: 答えを全部止めたのではない）');
+  await ext.close();
+  await p.close();
+});
+
 test('review: どのページでも content script・偽の手続き・side panel が例外を出さない', () => {
   assert.deepEqual(errors, []);
 });

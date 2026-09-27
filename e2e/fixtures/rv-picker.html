@@ -1,0 +1,26 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>診療の予約</title>
+<style>body{font-family:sans-serif;margin:0}main{padding:24px}button{display:block;margin-top:12px;font-size:16px}ul{border:1px solid #999;margin:0;padding:0;list-style:none;width:200px}li{padding:4px 8px}</style></head>
+<body><main><h1>診療の予約</h1>
+<p>来院の日時は受付で確認してください。</p>
+<form action="rv-picked.html" method="get">
+  <!-- Headless UI の Listbox と同じ形: ボタンが選んだ物の文字を出し、aria-labelledby に自分の id も入れる。選ぶと一覧を閉じてボタンへ focus を戻す -->
+  <span id="dl">診療科</span>
+  <button type="button" id="dept" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="dl dept"><span>選択してください</span></button>
+  <ul role="listbox" id="opts" tabindex="0" aria-labelledby="dl" hidden><li role="option" aria-selected="false">内科</li><li role="option" aria-selected="false">小児科</li><li role="option" aria-selected="false">皮膚科</li></ul>
+  <span id="docl">担当医</span>
+  <button type="button" id="doc" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="docl doc"><span>佐藤医師</span></button>
+  <label>支払い <button type="button" id="pay" aria-haspopup="listbox"><span>現地払い</span></button></label>
+  <button type="submit" id="go">確認へ進む</button>
+</form></main>
+<script>
+const b = document.getElementById('dept'), ul = document.getElementById('opts');
+b.addEventListener('click', () => { ul.hidden = false; b.setAttribute('aria-expanded', 'true'); ul.focus(); });
+ul.addEventListener('click', (e) => {
+  const o = e.target.closest('[role=option]');
+  if (!o) return;
+  b.firstElementChild.textContent = o.textContent;
+  ul.hidden = true;
+  b.setAttribute('aria-expanded', 'false');
+  b.focus();
+});
+</script></body></html>

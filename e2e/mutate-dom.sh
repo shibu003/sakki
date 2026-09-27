@@ -1,7 +1,9 @@
 #!/bin/bash
 # DOM 部分の負の対照: repo の複製に 1 か所ずつ変異を入れ、関係する E2E だけを回して赤を数える（赤くならない変異 = その検査は何も測っていない）。
 # 使い方: bash e2e/mutate-dom.sh <名前>   名前を省くと全部。base は変異なし（全部 ok のはず）
+# 終了コード: base が 1 本でも赤い・変異が 1 つでも生き残った（not ok が 0）なら 1（CI の門）
 set -u
+FAIL=0
 SRC=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/sakki-mutate.XXXXXX")}
 W3='入れた直後|同意の欄を押した後|PBI-0004'
@@ -20,8 +22,16 @@ assert s.count(a) == 1, a
 open(p, 'w').write(s.replace(a, b))
 PY
   (cd "$R" && timeout 600 node --test --test-concurrency=1 --test-reporter=tap --test-name-pattern="$2" e2e/*.test.js > "$OUT/$1.tap" 2>&1)
-  echo "$1: $(grep -cE '^ok ' "$OUT/$1.tap") ok / $(grep -cE '^not ok ' "$OUT/$1.tap") not ok"
+  local ok bad
+  ok=$(grep -cE '^ok ' "$OUT/$1.tap"); bad=$(grep -cE '^not ok ' "$OUT/$1.tap") # ugrep は 0 件で空を返す
+  ok=${ok:-0}; bad=${bad:-0}
+  echo "$1: $ok ok / $bad not ok"
   grep -E '^not ok ' "$OUT/$1.tap" | cut -c1-110
+  if [ "$1" = base ]; then
+    [ "$bad" = 0 ] && [ "$ok" -gt 0 ] || { echo "  → base が赤い（変異なしで落ちる = 環境か実装。$OUT/base.tap）"; FAIL=1; }
+  elif [ "$bad" = 0 ]; then
+    echo "  → 生き残り（赤くならない = この検査は何も測っていない）"; FAIL=1
+  fi
 }
 R=src/recorder.js
 one() {
@@ -57,10 +67,22 @@ one() {
     # module review（e2e/review.test.js）: 名前の欄の見落とし・写しの見える属性
     namere)   run namere "$RV" $R "|者名|姓|せい|めい|セイ|メイ|フリガナ|ふりがな|カナ|^名$|^名[（(]|\\bname\\b/i;||||姓|せい|めい|セイ|メイ|フリガナ|ふりがな|カナ|^名$|^名[（(]/;";;
     textattr) run textattr "$RV" src/redact.js "|content|summary|datetime|download|abbr|cite|aria-||||content|summary|aria-";;
+    # PBI-0009: get の送り手・自作の選び物（aria-haspopup=listbox）
+    getsender) run getsender "$RV" src/background.js "      if (!sender.url?.startsWith(OWN)) return null;
+|||";;
+    picker)   run picker "$RV" $R " || FIELD_ROLES.test(role(el)) || isPicker(el);||| || FIELD_ROLES.test(role(el));";;
+    pickbtn)  run pickbtn "$RV" $R "    if (isPicker(el)) return false;
+|||";;
+    pickval)  run pickval "$RV" $R ": t === 'INPUT' || t === 'TEXTAREA' ? el.value : el.textContent; };|||: el.isContentEditable ? el.textContent : el.value; };";;
+    selfname) run selfname "$RV" $R "return l && l !== el ? labelText(l) : '';|||return l ? labelText(l) : '';";;
+    picklabel) run picklabel "$RV" $R "closest('select,textarea,datalist,[aria-haspopup=\"listbox\" i]')|||closest('select,textarea,datalist')";;
+    pickclick) run pickclick "$RV" $R "record(() => { collectValues(); return {|||record(() => { return {";;
+    whole)    run whole "$RV" $R "name: name || (whole && normalize(p).s.length >= 3) })|||name })";;
     # AC-X2 ②（PBI-0002）: 文脈が切れた時の catch を外す
     reload)   run reload '拡張が再読み込み' $R "queue = queue.then(job).catch(() => stop());|||queue = queue.then(job);";;
     *) echo "知らない名前: $1"; return 1;;
   esac
 }
-if [ $# -gt 0 ]; then one "$1"; else for m in base search weakless fixed keydown label copymask choice script vh cssom shadow camera nocopy inline overlay caption faststart xmlname nocodec stale abort namere textattr reload; do one "$m"; done; fi
+if [ $# -gt 0 ]; then one "$1"; else for m in base search weakless fixed keydown label copymask choice script vh cssom shadow camera nocopy inline overlay caption faststart xmlname nocodec stale abort namere textattr getsender picker pickbtn pickval selfname picklabel pickclick whole reload; do one "$m"; done; fi
 echo "# TAP: $OUT"
+exit $FAIL

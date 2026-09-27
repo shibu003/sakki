@@ -70,6 +70,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   (async () => {
     await ready;
     if (msg.type === 'get') {
+      // 記録を読めるのは拡張のページだけ（sender.url は browser が付ける）。content script（乗っ取られた renderer）には答えない
+      if (!sender.url?.startsWith(OWN)) return null;
       apply({ type: 'tick' });
       hideGhost(msg.tab); // side panel が開いた → そのタブのゴーストは引っ込む
       return { consented: consent, session: sessionFor(state, msg.tab) };
