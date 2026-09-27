@@ -128,7 +128,7 @@ test('e2e: 値を取らない — 名前も選んだ日も記録に残らない�
   assert.ok(!json.includes('山田') && !json.includes('10月15日') && !json.includes('10月14日'), 'state に値が無い');
   for (const s of textsOf(booking)) assert.ok(!/\d/.test(s), `骨組みの文字に数字: ${s}`);
   const h = booking.pages[1].items.find((i) => i.k === 'heading');
-  assert.equal(h.s, '■■ 様の予約内容（■■月■■日）');
+  assert.equal(h.s, '■■ 様の予約内容（■■■■■■）'); // 選んだ日（10月15日）は覚える集まりに入るので、月・日 も伏せる
   assert.equal(booking.phase, 'homed');
   const kinds = booking.pages[0].evs.map((e) => e.k).join(',');
   // 欄を押す = focus と click。select は押すたびに click、選ぶたびに input（0.8 秒あけたので 1 回ずつ）
@@ -308,7 +308,16 @@ test('e2e: side panel が一番の迷いで 1 倍に落とし、見出しの上�
 // ---- PBI-0004: 完了の合図と、角で待つゴースト ----
 const GHOST_SEL = 'iframe[title="さっきの私"]';
 const ghosts = (p) => p.locator(GHOST_SEL).count();
-const tabIdOf = (p) => sw.evaluate((u) => chrome.tabs.query({}).then((ts) => ts.find((t) => t.url === u)?.id), p.url());
+// タブの id は開いた時に覚える（URL で引くと、前の検査で同じ done.html に居るタブを拾う）。偽の手続きのタブは 1 枚なので URL で引く
+const tabIds = new WeakMap();
+async function newTab() {
+  const ids = () => sw.evaluate(() => chrome.tabs.query({}).then((ts) => ts.map((t) => t.id)));
+  const before = new Set(await ids());
+  const p = await ctx.newPage();
+  tabIds.set(p, await waitFor(async () => (await ids()).find((id) => !before.has(id)), '開いたタブの id'));
+  return p;
+}
+const tabIdOf = async (p) => tabIds.get(p) ?? sw.evaluate((u) => chrome.tabs.query({}).then((ts) => ts.find((t) => t.url === u)?.id), p.url());
 // callable は拡張のページ（偽の手続き）で session.js を読んで、今の state に当てる
 const callableOf = async (p) => onboarding().evaluate(async (tab) => {
   const { callable } = await import('./src/session.js');
@@ -319,7 +328,7 @@ const boxOf = (p, sel) => p.$eval(sel, (el) => { const r = el.getBoundingClientR
 const overlap = (a, b) => a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
 // 渦のある束（泊まる日を 3 回選ぶ）を持つタブ
 async function lostTab() {
-  const p = await ctx.newPage();
+  const p = await newTab();
   await p.goto(url('booking', 'booking.html'));
   await p.bringToFront();
   await p.click('#name');
@@ -375,7 +384,7 @@ test('e2e: 確認画面は弱い合図、完了画面の空いた角にゴース
 });
 
 test('e2e: 迷いの無い手続きの完了では何も出ない（PBI-0004 AC-2）', async () => {
-  const p = await ctx.newPage();
+  const p = await newTab();
   await p.goto(url('booking', 'booking.html'));
   await p.click('#name');
   await p.keyboard.type('伊藤');
