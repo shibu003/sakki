@@ -104,7 +104,10 @@ export function reduce(state, msg) {
   const site = msg.own ? 'sakki' : siteOf(msg.host || '');
   const child = String(r) !== String(msg.tab);
 
-  if (msg.type === 'hello') {
+  // hello = 最初の focus か click。ask = 読み込み時（中身なし）: 生きている束のページだけ hello と同じに扱い、返事で文脈を先に渡す
+  // （押した直後にページが替わっても最初の事象を落とさない）。束の外・閉じた束では何もしない（録り始めは最初の focus か click）
+  if (msg.type === 'hello' || msg.type === 'ask') {
+    if (msg.type === 'ask' && (!S || S.phase === 'closed')) return st;
     if (S && S.phase === 'closed') { dropSession(st, r); S = null; }  // 完了の後の次の手続き → 閉じた記録を捨てる
     if (!S) S = st.sessions[r] = newSession(Number(r), t, msg.seed);
     if (!msg.own && (isInternalHost(msg.host) || isCorpLogin(msg.host))) goInternal(S);
@@ -113,16 +116,12 @@ export function reduce(state, msg) {
     if (away) S.pages.push({ away: true, open: true, tab: msg.tab, host: msg.host, t: msg.since ?? t, t1: t });
     S.t1 = t;
     st.reply = { take: !away, noText: S.internal, seed: S.seed, memo: S.memo };
+    // 完了を判定してよいか: 押して移った先（このタブの最後の事象が主なボタン）・PDF の画面・印刷
+    if (msg.type === 'ask' && !away && (msg.why !== 'arrive' || lastEvOf(S, msg.tab)?.pr)) st.reply.check = 1;
     return st;
   }
 
   if (!S || S.phase === 'closed') return st;
-  // 完了を判定してよいか（中身は受けない）: 押して移った先（このタブの最後の事象が主なボタン）・PDF の画面・印刷
-  if (msg.type === 'ask') {
-    if (awayFor(S, site, child) || (msg.why === 'arrive' && !lastEvOf(S, msg.tab)?.pr)) return st;
-    st.reply = { check: 1 };
-    return st;
-  }
   if (msg.type === 'done') {
     S.t1 = t;
     if (msg.level === 'weak') { S.weak = t; return st; } // 弱い合図: 束は続く（右クリックだけ）

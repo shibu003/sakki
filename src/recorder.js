@@ -174,11 +174,15 @@
     let seen = 0;
     detect(() => (seen = gone(form) ? seen + 1 : 0) >= 2);
   }
-  // SW に判定してよいか聞く（中身なし）: arrive = 押して移った先・pdf = PDF の画面・print = 印刷した
+  // SW に聞く（中身なし）: arrive = 読み込んだ・pdf = PDF の画面・print = 印刷した。生きている束のページなら文脈が返り、
+  // 完了を判定してよい時は check が付く
   function ask(why) {
     enqueue(async () => {
-      const r = await chrome.runtime.sendMessage({ type: 'ask', why });
-      if (!r?.check || mode === 'idle') return;
+      const r = await chrome.runtime.sendMessage({ type: 'ask', why, since: Math.round(performance.timeOrigin) });
+      if (!r || mode === 'idle') return;
+      if (!r.take) return stop(); // よそのサイト（本拠の外）: 中身を取らない
+      if (!ctx) ctx = { ...r, memo: new Set(r.memo || []) };
+      if (!r.check) return;
       if (why === 'arrive') detect((last) => last || !!firstHeading());
       else signal(judge());
     });
@@ -413,10 +417,10 @@
       if (ev) out.push(ev);
       return out;
     };
+    // 返事を待たずに順に出す（1 通ずつ待つと、押した直後にページが替わった時に後ろの事象が落ちる）
     const flush = async (msgs) => {
-      let r;
-      for (const m of msgs) r = await send(m);
-      then?.(r);
+      const rs = await Promise.all(msgs.map(send));
+      then?.(rs.at(-1));
     };
     if (ctx) { const msgs = capture(); enqueue(() => flush(msgs)); return; }
     enqueue(async () => { if (await ensureReady()) await flush(capture()); });
