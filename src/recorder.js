@@ -527,7 +527,11 @@
   }
   // 今すぐ順に出し、返事は待たない（前の返事を待ってから出すと、機械が混んで SW の返事が遅い時に、押した click が次のページより先に出ずに落ちる）。
   // async = 文脈の切れた chrome.* が同期で投げても listener の外へ出さない。then は最後の返事を受ける
-  const flush = (msgs, then) => guard((async () => then?.((await Promise.all(msgs.map(send))).at(-1)))());
+  // （送るのは then?.() の引数の中に置かない: then が無いと引数ごと評価されず、何も送らない。842d8cf の CI で 22 本落ちた形）
+  const flush = (msgs, then) => guard((async () => {
+    const rs = await Promise.all(msgs.map(send));
+    then?.(rs.at(-1));
+  })());
   // 事象を記録する: 測るのは listener の中（同期）、送るのもその場で。この文書で文脈がまだ無い間だけ、ask か hello の返事を待ってから測る。
   // ponytail: 読み込み直後、SW が ask に答える前に押した click は測れない（伏せる種が無い物は送れない）→ 次のページで完了を出さない側に倒れる。
   // 塞ぐなら押した印だけを中身なしで今すぐ送る口を足す
