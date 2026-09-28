@@ -23,6 +23,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Chrome for Testing と OS の依存
+        timeout-minutes: 15 # 1.58.2 は Node 26 で zip の展開中に無言で固まり、job の 120 分を使い切った（microsoft/playwright#40724・1.60 で直った）
         run: npx playwright-core install --with-deps chromium
       - name: unit
         run: npm test
