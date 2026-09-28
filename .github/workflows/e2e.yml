@@ -15,8 +15,6 @@ jobs:
     defaults:
       run:
         shell: bash # -eo pipefail（tee の後ろでも落ちた事が消えない）
-    env:
-      OUT: ${{ runner.temp }}/mutate
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -67,6 +65,8 @@ jobs:
       - name: E2E
         run: npm run e2e
       - name: 変異（DOM の負の対照）
+        env:
+          OUT: ${{ runner.temp }}/mutate # runner の context は job の env では使えない（step では使える）
         run: |
           set +e
           bash e2e/mutate-dom.sh > "$RUNNER_TEMP/mutate.txt" 2>&1
