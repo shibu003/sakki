@@ -413,6 +413,23 @@ test('e2e: side panel が一番の迷いで 1 倍に落とし、見出しの上�
   assert.equal(r.mode, 'worst_spot');
   assert.ok(r.inHeading, '渦の中心が見出しの箱の中');
   assert.ok(r.withSwirl - r.without >= 10, `渦の赤い画素 ${r.withSwirl} - ${r.without}（半径 ${r.rad}）`);
+  // カメラが動いても写しの iframe が同じだけ動く（この束は 1280 幅のページが 360 幅に収まり、寄っても camera が 0 のまま = 走らせただけでは
+  // translate を測れない・CI の変異 camera が生き残った）。映っているページのまま camera を (80, 40) に置き、泊まる日の欄の箱を突き合わせる
+  const cam = await p.evaluate(async () => {
+    const { show } = await import('./src/sidepanel.js'); // 同じ URL = 走っている side panel の module（読み直さない）
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const { session } = await chrome.runtime.sendMessage({ type: 'get', tab: tab.id });
+    const pi = session.pages.findLastIndex((x) => x.dom && x.items.some((i) => i.s === '泊まる日'));
+    const it = session.pages[pi].items.find((i) => i.s === '泊まる日');
+    const d = { pi, scale: 0.5, x: 80, y: 40 };
+    show(session, { dom: d });
+    const cr = document.getElementById('c').getBoundingClientRect();
+    return { x: cr.left + it.x * d.scale - d.x, y: cr.top + it.y * d.scale - d.y };
+  });
+  const box = await iframeBox(p);
+  const day = await waitFor(() => shotOf(p).then((fr) => fr?.evaluate(() => { const b = document.querySelector('#day')?.getBoundingClientRect(); return b && { l: b.left, t: b.top }; })).catch(() => null), '写しの泊まる日の欄');
+  const at = { x: box.x + day.l * box.s, y: box.y + day.t * box.s };
+  assert.ok(Math.abs(at.x - cam.x) <= 2 && Math.abs(at.y - cam.y) <= 2, `camera (80, 40) の時、写しの欄 ${JSON.stringify(at)} が骨組みの箱 ${JSON.stringify(cam)} と重なる`);
   await p.close();
 });
 

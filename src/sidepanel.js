@@ -12,7 +12,7 @@ let run = 0;
 let clip = null; // 出来た MP4（File）。共有シートは押した瞬間の操作が要るので、押す前に作っておく
 let shown = null; // iframe に建てているページ
 
-function show(S, f) {
+export function show(S, f) { // E2E が同じ side panel の module から呼ぶ（カメラの検査）
   const d = f.dom;
   const p = d && S.pages[d.pi];
   shot.hidden = !p;

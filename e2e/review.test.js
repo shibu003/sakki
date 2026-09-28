@@ -182,6 +182,22 @@ test('review 攻撃: 自作の選び物（aria-haspopup=listbox のボタン）�
   await p.close();
 });
 
+// 自分を指す aria-labelledby は選び物だけではない。文字を打つ div（role=textbox）では中の文字 = 打った値なので、自分の id を飛ばさないと
+// 2 度目の focus の名前に値が混ざる（選び物の中の文字は labelText が別に飛ばすので、選び物だけでは自分を飛ばす所を測れない・CI の変異 selfname が生き残った）
+test('review 攻撃: 自分を指す aria-labelledby の文字の欄（role=textbox）で打った文字は、戻って focus しても名前に混ざらない', async () => {
+  const p = await newPage();
+  await p.goto(url('note', 'rv-note.html'));
+  await p.click('#note');
+  await p.keyboard.type('個室を希望します');
+  await p.click('#other');
+  await p.click('#note');
+  const S = await waitFor(async () => { const x = findSession(await readState(), 'note.test'); return x?.pages[0]?.evs.filter((e) => e.k === 'focus').length >= 2 ? x : null; }, '2 度目の focus が届く');
+  const focus = S.pages[0].evs.filter((e) => e.k === 'focus').map((e) => e.s);
+  assert.deepEqual(focus, ['ご要望', 'ご要望'], `戻って focus しても名前に値が混ざらない: ${JSON.stringify(focus)}`);
+  assert.ok(!/個室|希望/.test(stringsOf(S)), stringsOf(S));
+  await p.close();
+});
+
 // PBI-0009 ①: 乗っ取られた renderer = content script の世界で好きな script が走る。get は今のタブに記録が無ければ一番新しい束を返すので、どのタブからでも読めていた
 test('review 攻撃: content script から get を送っても記録は返らず、拡張のページ（タブで開いても）には返る', async () => {
   const p = await newPage();
