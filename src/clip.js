@@ -89,7 +89,11 @@ export async function raster(page, get) {
   const img = new Image();
   img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   await img.decode();
-  return createImageBitmap(img);
+  // Chrome 151 は foreignObject の在る SVG を createImageBitmap(img) で取ると汚れた絵にする（VideoFrame も getImageData も SecurityError）。
+  // img のまま canvas に描くのは汚れないので、一度描いてから取る（2026-09-27 実測: Chrome 145 では汚れなかった・PBI-0009）
+  const c = new OffscreenCanvas(page.vw, h);
+  c.getContext('2d').drawImage(img, 0, 0);
+  return c.transferToImageBitmap();
 }
 
 // 焼き込みの帯（下端）。1 行目（ドメイン）を大きく

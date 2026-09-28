@@ -35,7 +35,9 @@
   let ghostEl = null;
   let ghostTab = null;
 
-  const shadowOf = (el) => el.shadowRoot || globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) || null;
+  // 拡張が再読み込みされると、古いタブの chrome.* は同期で投げる。ここは listener と timer から直に呼ばれる（enqueue の catch の外）ので、
+  // 閉じた root が見えないだけにして進み、次の send で止まる（CI の Chrome 151 で focusin・click・input のたびに 6 回投げていた）
+  const shadowOf = (el) => { if (el.shadowRoot) return el.shadowRoot; try { return globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) || null; } catch { return null; } };
   const text = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 120);
   const rectOf = (el) => {
     const r = el.getBoundingClientRect();

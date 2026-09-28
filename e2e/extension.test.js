@@ -254,7 +254,7 @@ test('e2e: login の内側 — 本文を取らず、残す文字も伏せ、画�
   assert.equal(bands[0].s, undefined);
   const media = items.filter((i) => i.k === 'media');
   const face = await bySel('#face'), frame = await bySel('#ext');
-  assert.equal(media.length, 2);
+  assert.equal(media.length, 2, JSON.stringify(items.map((i) => [i.k, i.w, i.h, i.s])));
   for (const [m, want] of [[media[0], face], [media[1], frame]]) {
     assert.ok(Math.abs(m.w - want.w) <= 1 && Math.abs(m.h - want.h) <= 1, `箱の大きさ ${m.w}x${m.h} vs ${want.w}x${want.h}`);
     assert.equal(m.s, undefined);
@@ -480,8 +480,8 @@ test('e2e: 確認画面は弱い合図、完了画面の空いた角にゴース
   assert.ok(Math.abs(g.l - 16) <= 1 && Math.abs(vh - g.b - 16) <= 1, `左下（右下は固定のチャットで塞がる）: ${JSON.stringify(g)} vh=${vh}`);
   for (const sel of ['h1', '#no', 'header a', '#top', '#chat', 'form[role=search]']) assert.ok(!overlap(g, await boxOf(p, sel)), `${sel} に重ならない`);
   assert.equal(await p.evaluate((s) => document.activeElement === document.querySelector(s), GHOST_SEL), false, 'focus を奪わない');
-  const S = await sessionOfTab(p);
-  assert.equal(S.phase, 'closed');
+  // ゴーストは返事で即出るが、storage.session は background.js の save() が 200ms まとめて書く（apply のたびに延びる）
+  const S = await waitFor(async () => { const x = await sessionOfTab(p); return x?.phase === 'closed' ? x : null; }, '完了で閉じる', 6000);
   assert.equal(S.pages.at(-1).items.find((i) => i.k === 'heading')?.s, '予約が完了しました');
   // サイトが自分で呼ぶ scroll では引っ込まない
   await p.evaluate(() => scrollTo(0, 300));
@@ -490,7 +490,8 @@ test('e2e: 確認画面は弱い合図、完了画面の空いた角にゴース
   // 押すと side panel が開き（get が来る）、ゴーストは引っ込む
   await p.frameLocator(GHOST_SEL).locator('#g').click();
   await waitFor(async () => (await ghosts(p)) === 0, 'ゴーストを押すと引っ込む（side panel が開いた）', 5000);
-  assert.ok((await sw.evaluate(() => globalThis.__gets)) >= 1, 'side panel が get を送った');
+  // 枠は ghost_pressed（sidePanel.open が決まった直後）で外れ、get は side panel の文書が読み込まれてから来る = 後になりうる
+  await waitFor(async () => (await sw.evaluate(() => globalThis.__gets)) >= 1, 'side panel が get を送った', 5000);
   assert.equal(await callableOf(p), true, '引っ込んだ後も右クリックで呼べる');
 });
 
@@ -507,21 +508,30 @@ test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シ�
     window.__encs = [];
     window.VideoEncoder = class extends E {
       constructor(o) { super(o); this.n = 0; window.__encs.push(this); }
+      configure(c) { this.codec = c.codec; return super.configure(c); }
       encode(f, o) { this.n++; return super.encode(f, o); }
       close() { this.closedAt = this.n; return super.close(); }
     };
+  });
+  // 待ちが切れたら、どこで止まったかを message に出す（「作れませんでした」で n が 0 = 1 枚目で投げた・「作っています…」で n が 0 = 写しの絵が決まらない・5 = encoder が受け取らない）
+  const clipWait = (fn, ms) => p.waitForFunction(fn, null, { timeout: ms }).catch(async (e) => {
+    const st = await p.evaluate(() => ({
+      send: ['hidden', 'disabled', 'textContent'].map((k) => document.getElementById('send')[k]), mode: document.body.dataset.mode,
+      encs: window.__encs.map((x) => ({ codec: x.codec, n: x.n, q: x.encodeQueueSize, state: x.state, closedAt: x.closedAt })),
+    })).catch((x) => String(x));
+    throw new Error(`${e.message}\n動画の状態: ${JSON.stringify(st)}`);
   });
   const reqs = [];
   p.on('request', (r) => reqs.push({ method: r.method(), url: r.url() }));
   await p.setViewportSize({ width: 360, height: 640 });
   await p.goto(`chrome-extension://${extId}/sidepanel.html`);
   // AC-X3: 作っている途中で読み直す（もう一度・ゴーストが押された時と同じ load）→ 前の encoder は途中で閉じる
-  await p.waitForFunction(() => window.__encs[0]?.n > 5, null, { timeout: 60000 });
+  await clipWait(() => window.__encs[0]?.n > 5, 60000);
   assert.equal(await p.$eval('#send', (b) => [b.hidden, b.disabled, b.textContent].join('|')), 'false|true|動画を作っています…');
   await p.evaluate(() => document.getElementById('again').click());
-  await p.waitForFunction(() => !document.getElementById('send').disabled, null, { timeout: 180000 });
+  await clipWait(() => !document.getElementById('send').disabled, 180000);
   assert.equal(await p.textContent('#send'), '送る');
-  const encs = await p.evaluate(() => window.__encs.map((e) => ({ n: e.n, closedAt: e.closedAt })));
+  const encs = await p.evaluate(() => window.__encs.map((e) => ({ codec: e.codec, n: e.n, closedAt: e.closedAt })));
   assert.equal(encs.length, 2, JSON.stringify(encs));
   assert.ok(encs[0].closedAt != null && encs[0].closedAt < encs[1].n, `前の encoder は途中で閉じた: ${JSON.stringify(encs)}`);
   // AC-1: 押すと共有シートに MP4 が 1 本。ftyp が先頭・moov が mdat より前（チャットの streaming 再生）・H.264
@@ -531,7 +541,7 @@ test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シ�
     const f = window.__shared[0];
     const b = new Uint8Array(await f.arrayBuffer());
     const find = (s) => { for (let i = 0; i + 4 <= b.length; i++) if (b[i] === s.charCodeAt(0) && b[i + 1] === s.charCodeAt(1) && b[i + 2] === s.charCodeAt(2) && b[i + 3] === s.charCodeAt(3)) return i; return -1; };
-    // この Chrome に H.264 の encoder が在るか（clip.js の configOf と同じ形で。CI の linux の Chrome for Testing には無い事がある）
+    // この Chrome に H.264 の encoder が在るか（clip.js の configOf と同じ形で。CI の ubuntu の Chrome for Testing 151 には在った・run 36373372943 の下見）
     const h264 = (await Promise.all(['avc1.4d0028', 'avc1.42001f'].map((codec) => VideoEncoder.isConfigSupported({ codec, width: 720, height: 1280, bitrate: 2e6, framerate: 30, avc: { format: 'avc' } }).then((r) => r.supported, () => false)))).some(Boolean);
     return { name: f.name, type: f.type, size: b.length, ftyp: find('ftyp'), moov: find('moov'), mdat: find('mdat'), avc1: find('avc1'), vp09: find('vp09'), h264 };
   });
@@ -607,7 +617,8 @@ test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シ�
   });
   assert.deepEqual(xmlish, [220, 38, 38], 'x-on:click・@click・:class・html の xmlns・o:p・制御文字の在る写しも絵になる');
   // AC-4: 通信は全部 GET で、拡張の中か写しに在る資源だけ（記録・動画を載せた送信は 0 本）
-  const odd = reqs.filter((r) => r.method !== 'GET' || !(r.url.startsWith(`chrome-extension://${extId}/`) || r.url.startsWith('data:') || seen.doms.includes(r.url)));
+  // blob:（拡張の origin）は検査が <video> で開いた手元の MP4（Chrome 151・playwright-core 1.62.1 で request に出た。145・1.58.2 では出ていなかった）。外へは出ない
+  const odd = reqs.filter((r) => r.method !== 'GET' || !(r.url.startsWith(`chrome-extension://${extId}/`) || r.url.startsWith(`blob:chrome-extension://${extId}/`) || r.url.startsWith('data:') || seen.doms.includes(r.url)));
   assert.deepEqual(odd, [], '写しの外への通信');
   // AC-X1: 共有シートの無い Chrome → 同じ MP4 がダウンロード
   await p.evaluate(() => { navigator.canShare = () => false; });
@@ -635,7 +646,7 @@ test('e2e: H.264 も VP9 も無い Chrome では「送る」は押せず、訳�
   await p.addInitScript(() => { VideoEncoder.isConfigSupported = async () => ({ supported: false }); });
   await p.setViewportSize({ width: 360, height: 640 });
   await p.goto(`chrome-extension://${extId}/sidepanel.html`);
-  await p.waitForFunction(() => document.getElementById('send').textContent !== '動画を作っています…', null, { timeout: 20000 });
+  await p.waitForFunction(() => { const b = document.getElementById('send'); return !b.hidden && b.textContent !== '動画を作っています…'; }, null, { timeout: 20000 }); // 初めの「送る」（hidden）で抜けない
   assert.deepEqual(await p.$eval('#send', (b) => [b.hidden, b.disabled, b.textContent]), [false, true, 'この Chrome では動画を作れません']);
   await p.close();
 });
@@ -666,7 +677,7 @@ test('e2e: 控えの PDF と印刷で完了、入力画面の PDF は弱い・�
   await a.addStyleTag({ content: 'iframe{display:none!important;opacity:0!important}' });
   await a.evaluate(() => dispatchEvent(new Event('afterprint')));
   await waitFor(async () => (await ghosts(a)) === 1, '印刷の後にゴースト', 6000);
-  assert.equal((await sessionOfTab(a)).phase, 'closed');
+  await waitFor(async () => (await sessionOfTab(a))?.phase === 'closed', '印刷で閉じる', 6000);
   assert.deepEqual(await a.$eval(GHOST_SEL, (f) => [getComputedStyle(f).display, getComputedStyle(f).opacity]), ['block', '1']);
   await a.keyboard.press('Shift'); // (c) キー
   await waitFor(async () => (await ghosts(a)) === 0, 'キーで引っ込む', 2000);
@@ -675,7 +686,7 @@ test('e2e: 控えの PDF と印刷で完了、入力画面の PDF は弱い・�
   await b.goto(url('booking', 'receipt.html'));
   await b.click('#pdf');
   await waitFor(async () => (await ghosts(b)) === 1, '控えの PDF でゴースト', 6000);
-  assert.equal((await sessionOfTab(b)).phase, 'closed');
+  await waitFor(async () => (await sessionOfTab(b))?.phase === 'closed', '控えの PDF で閉じる', 6000);
   await b.mouse.click(300, 300); // (d) 本文を押す
   await waitFor(async () => (await ghosts(b)) === 0, '本文を押すと引っ込む', 2000);
   await sleep(1500);
@@ -707,7 +718,7 @@ test('e2e: 拡張が再読み込みされたら、古いタブは例外を出さ
   const p = await ctx.newPage();
   const errors = [];
   p.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-  p.on('pageerror', (e) => errors.push(String(e)));
+  p.on('pageerror', (e) => errors.push(e.stack || String(e))); // stack = どの行が文脈の切れた chrome.* に触ったか
   await p.goto(url('booking', 'booking.html'));
   await p.click('#name');
   await sw.evaluate(() => chrome.runtime.reload()).catch(() => {});

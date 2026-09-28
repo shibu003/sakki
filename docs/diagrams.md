@@ -131,7 +131,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     load[load: side panel が束を読んだ。再生と並んで makeClip を始める] --> pick{pickCodec: isConfigSupported}
-    pick -- avc1.4d0028 → avc1.42001f → vp09 のどれか --> raster[raster: ページごとに 1 回。写しの資源を data: に直し、SVG の foreignObject → ImageBitmap]
+    pick -- avc1.4d0028 → avc1.42001f → vp09 のどれか --> raster[raster: ページごとに 1 回。写しの資源を data: に直し、SVG の foreignObject → img → canvas に描いて ImageBitmap]
     pick -- どれも無い --> noCodec[送るは押せない: この Chrome では動画を作れません]
     raster -- 絵に出来ない・写しが無い --> skel[そのページだけ骨組みの絵]
     raster --> frames[冒頭 1.5 秒 + 再生 0〜total + 最後 2 秒を 30 fps で。frame の dom カメラで写しの絵を描き、paint を重ねる。冒頭と最後に captions の帯]
@@ -147,4 +147,5 @@ flowchart TD
 ```
 
 - 動画の材料は記録（写し・事象）と、写しに在る資源の GET だけ。記録や動画を載せた送信は持たない
+- 写しの絵は createImageBitmap(img) で直に取らない: Chrome 151 は foreignObject の在る SVG をそう取ると汚れた絵にし、VideoFrame が 1 枚目で SecurityError になる（PBI-0009・Chrome 145 では汚れなかった）。img を canvas に描いてから取る
 - 焼き込み（`captions`）は ① 登録できるドメイン（`siteOf`）② 閉じた束の最後のページの見出し ③ 一番の迷いの窓の後の最初の名前の在る click。社内の束は 0 行

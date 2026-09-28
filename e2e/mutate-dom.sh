@@ -10,6 +10,7 @@ W3='入れた直後|同意の欄を押した後|PBI-0004'
 W7='入れた直後|同意の欄を押した後|値を取らない|PBI-0007|PBI-0003|login の内側'
 W5='入れた直後|同意の欄を押した後|PBI-0004 AC-1|PBI-0005'
 RV='review 通し ①|review 攻撃'
+WR='入れた直後|同意の欄を押した後|拡張が再読み込み' # 同意の前は recorder が起きないので、同意の検査も一緒に回す（無いと catch を外しても何も投げず生き残る）
 run() { # $1 = 名前, $2 = 検査の名前の型, $3 = 変える file, $4 = 置換（a|||b。a はその file に 1 回だけ在る）
   local R=$OUT/$1
   rm -rf "$R" && mkdir -p "$R" && (cd "$SRC" && git ls-files -co --exclude-standard | grep -v '^backlog/' | tar -cf - -T -) | tar -xf - -C "$R" && ln -s "$SRC/node_modules" "$R/node_modules"
@@ -36,7 +37,7 @@ PY
 R=src/recorder.js
 one() {
   case "$1" in
-    base)     run base "$W3|$W7|$W5|$RV|拡張が再読み込み" $R "const judge = |||const judge = ";;
+    base)     run base "$W3|$W7|$W5|$RV|$WR" $R "const judge = |||const judge = ";;
     # W3（PBI-0004）: 完了の合図と角のゴースト
     search)   run search "$W3" $R "const inSearch = (el) => !!el.closest('[role=search],search') || [...(el.form?.elements || [])].some((f) => tag(f) === 'INPUT' && isSearchField(f));|||const inSearch = () => false;";;
     weakless) run weakless "$W3" $R "const judge = () => (submitLeft() ? 'weak' : 'strong');|||const judge = () => 'strong';";;
@@ -79,10 +80,13 @@ one() {
     pickclick) run pickclick "$RV" $R "record(() => { collectValues(); return {|||record(() => { return {";;
     whole)    run whole "$RV" $R "name: name || (whole && normalize(p).s.length >= 3) })|||name })";;
     # AC-X2 ②（PBI-0002）: 文脈が切れた時の catch を外す
-    reload)   run reload '拡張が再読み込み' $R "queue = queue.then(job).catch(() => stop());|||queue = queue.then(job);";;
+    reload)   run reload "$WR" $R "queue = queue.then(job).catch(() => stop());|||queue = queue.then(job);";;
+    # PBI-0009（CI の run 36373372943）: 文脈が切れた後の chrome.dom（listener から同期で呼ぶ）・Chrome 151 で汚れる createImageBitmap(img)
+    shadowctx) run shadowctx "$WR" $R "try { return globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) || null; } catch { return null; }|||return globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) || null;";;
+    taint)    run taint "$W5" src/clip.js "return c.transferToImageBitmap();|||return createImageBitmap(img);";;
     *) echo "知らない名前: $1"; return 1;;
   esac
 }
-if [ $# -gt 0 ]; then one "$1"; else for m in base search weakless fixed keydown label copymask choice script vh cssom shadow camera nocopy inline overlay caption faststart xmlname nocodec stale abort namere textattr getsender picker pickbtn pickval selfname picklabel pickclick whole reload; do one "$m"; done; fi
+if [ $# -gt 0 ]; then one "$1"; else for m in base search weakless fixed keydown label copymask choice script vh cssom shadow camera nocopy inline overlay caption faststart xmlname nocodec stale abort namere textattr getsender picker pickbtn pickval selfname picklabel pickclick whole reload shadowctx taint; do one "$m"; done; fi
 echo "# TAP: $OUT"
 exit $FAIL

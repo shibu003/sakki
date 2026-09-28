@@ -90,7 +90,10 @@ test('review 通し ②: sakki を押すと実際の見た目の上を自分が�
   const shot = await (await p.$('#page')).contentFrame();
   assert.equal(await shot.evaluate(() => document.querySelector('section:not([hidden]) h1')?.textContent), '宿の予約（ためし）', '実際の見た目の上を走る');
   await p.waitForFunction(() => document.body.dataset.done === '1', null, { timeout: 30000 });
-  await p.waitForFunction(() => !document.getElementById('send').disabled, null, { timeout: 180000 });
+  await p.waitForFunction(() => !document.getElementById('send').disabled, null, { timeout: 180000 }).catch(async (e) => {
+    const st = await p.evaluate(() => ({ send: ['hidden', 'disabled', 'textContent'].map((k) => document.getElementById('send')[k]), mode: document.body.dataset.mode })).catch((x) => String(x));
+    throw new Error(`${e.message}\n動画の状態: ${JSON.stringify(st)}`); // 「動画を作っています…」のまま = 終わらない・「作れませんでした」= makeClip が投げた（Chrome 151 の汚れた絵はこれだった）
+  });
   await p.click('#send');
   await p.waitForFunction(() => window.__shared.length === 1, null, { timeout: 5000 });
   const mp4 = await p.evaluate(async () => {
