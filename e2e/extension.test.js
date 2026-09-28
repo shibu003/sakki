@@ -454,8 +454,24 @@ const callableOf = async (p) => onboarding().evaluate(async (tab) => {
 }, await tabIdOf(p));
 const boxOf = (p, sel) => p.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom }; });
 const overlap = (a, b) => a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
-// 渦のある束（泊まる日を 3 回選ぶ）を持つタブ
-async function lostTab() {
+// 混んだ機械の形: 次に来る content script の 1 通の返事を ms 遅らせる（SW を reducer の前で塞ぐ = 後ろの事象も並んで待つ）。
+// background.js は content script の 1 通ごとに crypto.getRandomValues を 1 回呼ぶ（await ready の後・apply と返事の前）。__slowed = 塞いだ回数
+const slowSW = (ms = 1500) => sw.evaluate((ms) => {
+  if (globalThis.__slowed == null) {
+    globalThis.__slowed = 0;
+    const g = crypto.getRandomValues.bind(crypto);
+    crypto.getRandomValues = (a) => {
+      const w = globalThis.__slow;
+      globalThis.__slow = 0;
+      if (w) { globalThis.__slowed++; const t = Date.now(); while (Date.now() - t < w); }
+      return g(a);
+    };
+  }
+  globalThis.__slow = ms;
+}, ms);
+const slowedOf = () => sw.evaluate(() => globalThis.__slowed || 0);
+// 渦のある束（泊まる日を 3 回選ぶ）を持つタブ。busy = 最後に選んだ直後から SW が混む（選んだ入力の返事が、送信を押すより後に来る）
+async function lostTab(busy) {
   const p = await newTab();
   await p.goto(url('booking', 'booking.html'));
   await p.bringToFront();
@@ -464,6 +480,7 @@ async function lostTab() {
   for (const d of ['10月14日', '10月16日', '10月15日']) {
     await p.click('#day');
     await p.selectOption('#day', d);
+    if (busy && d === '10月15日') await slowSW();
     await sleep(900);
   }
   return p;
@@ -478,18 +495,24 @@ test('e2e: 確認画面は弱い合図、完了画面の空いた角にゴース
     chrome.contextMenus.update = function (id, props, cb) { globalThis.__menu.push([id, props.visible]); return u.call(chrome.contextMenus, id, props, cb); };
     chrome.runtime.onMessage.addListener((m) => { if (m?.type === 'get') globalThis.__gets++; });
   });
-  const p = await lostTab();
+  // 機械が混んでいても: 最後に選んだ入力の返事が遅れている間に押した「予約する」（pr）が、確認画面より先に SW へ届く
+  const p = await lostTab(true);
   await Promise.all([p.waitForURL(/confirm/), p.click('button[type=submit]')]);
   // 確認画面: main に確定の submit が残る = 弱い合図。ゴーストは出さず、右クリックだけ
-  const weak = await waitFor(async () => { const S = await sessionOfTab(p); return S?.weak ? S : null; }, '確認画面で弱い合図', 6000);
+  const weak = await waitFor(async () => { const S = await sessionOfTab(p); return S?.weak ? S : null; }, '確認画面で弱い合図（混んだ SW）', 6000);
+  assert.equal(await slowedOf(), 1, 'SW を 1 回塞いだ（塞がずに緑 = 混雑を測っていない）');
   await sleep(2000);
   assert.equal(await ghosts(p), 0, '確認画面にゴーストは出ない');
   assert.equal(weak.phase, 'homed');
   assert.equal(await callableOf(p), true);
   assert.ok((await sw.evaluate(() => globalThis.__menu)).some(([id, v]) => id === 'call_menu' && v === true), '右クリックの項目を見せた');
-  // 完了画面: 押した form が消え、main に押せる送信ボタンが無い（検索の form は数えない）= 強い合図
+  // 完了画面: 押した form が消え、main に押せる送信ボタンが無い（検索の form は数えない）= 強い合図。
+  // 混んだ機械で、見出しを押してすぐ確定: 見出しの click の返事が来る前に押した確定も、完了画面より先に SW へ届く
+  await slowSW();
+  await p.click('#h');
   await Promise.all([p.waitForURL(/done/), p.click('#ok')]);
-  await waitFor(async () => (await ghosts(p)) === 1, '完了画面にゴーストが 1 つ', 6000);
+  await waitFor(async () => (await ghosts(p)) === 1, '完了画面にゴーストが 1 つ（混んだ SW）', 6000);
+  assert.equal(await slowedOf(), 2, 'SW を 2 回目も塞いだ');
   const src = await p.$eval(GHOST_SEL, (f) => f.src);
   assert.equal(src, `chrome-extension://${extId}/ghost.html`);
   const g = await boxOf(p, GHOST_SEL);

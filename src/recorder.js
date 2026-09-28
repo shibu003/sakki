@@ -520,10 +520,17 @@
       p: isPick(el) ? 1 : undefined, s: isField(el) ? nameOf(el) : undefined, // 選べる物（radio 等）は名前を取らない
     });
   }
+  const guard = (p) => p.catch(() => stop()); // 文脈が切れた（拡張の再読み込み）→ 止まる。何も溜めない
+  // queue は文脈（ask・hello の返事）を待つ間だけの順番待ち。送った後の返事は待たない
   function enqueue(job) {
-    queue = queue.then(job).catch(() => stop()); // 文脈が切れた（拡張の再読み込み）→ 止まる。何も溜めない
+    queue = guard(queue.then(job));
   }
-  // 事象を記録する: 測るのは listener の中（同期）、送るのは順に。最初の 1 回だけ hello の返事を待ってから測る。then は最後の返事を受ける
+  // 今すぐ順に出し、返事は待たない（前の返事を待ってから出すと、機械が混んで SW の返事が遅い時に、押した click が次のページより先に出ずに落ちる）。
+  // async = 文脈の切れた chrome.* が同期で投げても listener の外へ出さない。then は最後の返事を受ける
+  const flush = (msgs, then) => guard((async () => then?.((await Promise.all(msgs.map(send))).at(-1)))());
+  // 事象を記録する: 測るのは listener の中（同期）、送るのもその場で。この文書で文脈がまだ無い間だけ、ask か hello の返事を待ってから測る。
+  // ponytail: 読み込み直後、SW が ask に答える前に押した click は測れない（伏せる種が無い物は送れない）→ 次のページで完了を出さない側に倒れる。
+  // 塞ぐなら押した印だけを中身なしで今すぐ送る口を足す
   function record(build, then) {
     const pend = detachInput();
     const capture = () => {
@@ -536,13 +543,8 @@
       if (ev) out.push(ev);
       return out;
     };
-    // 返事を待たずに順に出す（1 通ずつ待つと、押した直後にページが替わった時に後ろの事象が落ちる）
-    const flush = async (msgs) => {
-      const rs = await Promise.all(msgs.map(send));
-      then?.(rs.at(-1));
-    };
-    if (ctx) { const msgs = capture(); enqueue(() => flush(msgs)); return; }
-    enqueue(async () => { if (await ensureReady()) await flush(capture()); });
+    if (ctx) return void flush(capture(), then);
+    enqueue(async () => { if (await ensureReady()) flush(capture(), then); });
   }
 
   // 閉じた shadow root の中の事象は document では host に見えるので、root の activeElement / elementFromPoint で中へ辿る

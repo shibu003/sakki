@@ -42,6 +42,7 @@ one() {
     search)   run search "$W3" $R "const inSearch = (el) => !!el.closest('[role=search],search') || [...(el.form?.elements || [])].some((f) => tag(f) === 'INPUT' && isSearchField(f));|||const inSearch = () => false;";;
     weakless) run weakless "$W3" $R "const judge = () => (submitLeft() ? 'weak' : 'strong');|||const judge = () => 'strong';";;
     fixed)    run fixed "$W3" $R "if (pos === 'fixed' || pos === 'sticky' || isMedia(el)|||if (isMedia(el)";;
+    wait)     run wait '入れた直後|同意の欄を押した後|PBI-0004 AC-1' $R "if (ctx) return void flush(capture(), then);|||if (ctx) { const msgs = capture(); return void enqueue(() => flush(msgs, then)); }";; # 前の送信の返事を待ってから次を出す（直す前の形・G2 :174）
     keydown)  run keydown "$W3" $R "const HANDS = ['pointerdown', 'wheel', 'keydown', 'beforeprint'];|||const HANDS = ['pointerdown', 'wheel', 'beforeprint'];";;
     # PBI-0006: label の中の選択肢
     label)    run label '入れた直後|同意の欄を押した後|PBI-0006' $R "const byLabel = text(el.labels && el.labels.length ? [...el.labels].map(labelText).join(' ') : wrap ? labelText(wrap) : '');|||const byLabel = text(el.labels && el.labels.length ? [...el.labels].map((l) => l.textContent).join(' ') : wrap ? wrap.textContent : '');";;
@@ -80,13 +81,13 @@ one() {
     pickclick) run pickclick "$RV" $R "record(() => { collectValues(); return {|||record(() => { return {";;
     whole)    run whole "$RV" $R "name: name || (whole && normalize(p).s.length >= 3) })|||name })";;
     # AC-X2 ②（PBI-0002）: 文脈が切れた時の catch を外す
-    reload)   run reload "$WR" $R "queue = queue.then(job).catch(() => stop());|||queue = queue.then(job);";;
+    reload)   run reload "$WR" $R "const guard = (p) => p.catch(() => stop());|||const guard = (p) => p;";;
     # PBI-0009（CI の run 36373372943）: 文脈が切れた後の chrome.dom（listener から同期で呼ぶ）・Chrome 151 で汚れる createImageBitmap(img)
     shadowctx) run shadowctx "$WR" $R "try { return globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) || null; } catch { return null; }|||return globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) || null;";;
     taint)    run taint "$W5" src/clip.js "return c.transferToImageBitmap();|||return createImageBitmap(img);";;
     *) echo "知らない名前: $1"; return 1;;
   esac
 }
-if [ $# -gt 0 ]; then one "$1"; else for m in base search weakless fixed keydown label copymask choice script vh cssom shadow camera nocopy inline overlay caption faststart xmlname nocodec stale abort namere textattr getsender picker pickbtn pickval selfname picklabel pickclick whole reload shadowctx taint; do one "$m"; done; fi
+if [ $# -gt 0 ]; then one "$1"; else for m in base search weakless fixed wait keydown label copymask choice script vh cssom shadow camera nocopy inline overlay caption faststart xmlname nocodec stale abort namere textattr getsender picker pickbtn pickval selfname picklabel pickclick whole reload shadowctx taint; do one "$m"; done; fi
 echo "# TAP: $OUT"
 exit $FAIL
