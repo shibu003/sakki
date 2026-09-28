@@ -496,7 +496,8 @@ test('e2e: 確認画面は弱い合図、完了画面の空いた角にゴース
 });
 
 // 前の検査の束（泊まる日を 3 回選び直し、完了の画面まで = 一番新しい束）を動画にする。
-// side panel の navigator.share は差し替えて File を受け（headless でも canShare は true）、VideoEncoder は数える
+// side panel の navigator.share は差し替えて File を受け、VideoEncoder は数える。canShare も差し替える（Linux の Chrome には Web Share が無く、
+// canShare が undefined → ダウンロードに落ちる。CI の ubuntu で共有シートに 1 本も渡らなかった・run 36378448542）
 test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シートに渡る・無ければダウンロード（PBI-0005 通し AC-1〜4・AC-X1〜X3）', async (t) => {
   const p = await ctx.newPage();
   await p.addInitScript(() => {
@@ -504,6 +505,7 @@ test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シ�
     let fail = null;
     window.__shareFails = (name) => { fail = name; };
     navigator.share = async (d) => { if (fail) throw new DOMException('x', fail); window.__shared.push(d.files[0]); };
+    navigator.canShare = () => true;
     const E = window.VideoEncoder;
     window.__encs = [];
     window.VideoEncoder = class extends E {
@@ -626,7 +628,7 @@ test('e2e: 送る 1 回で、さっきの早送りが MP4 になって共有シ�
   assert.equal(dl.suggestedFilename(), 'sakki-booking.test.mp4');
   assert.equal(fs.statSync(await dl.path()).size, info.size);
   // AC-X2 ①: 利用者が共有シートを閉じた → 何もしない ② 他の理由で失敗 → ダウンロード
-  await p.evaluate(() => { delete navigator.canShare; window.__shareFails('AbortError'); });
+  await p.evaluate(() => { navigator.canShare = () => true; window.__shareFails('AbortError'); });
   let dls = 0;
   const onDl = () => dls++;
   p.on('download', onDl);

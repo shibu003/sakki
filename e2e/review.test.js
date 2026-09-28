@@ -83,7 +83,7 @@ test('review 通し ①: 入れた直後の偽の手続きで同意して予約�
 test('review 通し ②: sakki を押すと実際の見た目の上を自分が走り、「送る」1 回で MP4 が共有シートへ', async () => {
   // sakki のアイコン = side panel（テストでは sidepanel.html をタブで開く）。共有シートは差し替えて File を受ける
   const p = await newPage();
-  await p.addInitScript(() => { window.__shared = []; navigator.share = async (d) => { window.__shared.push(d.files[0]); }; });
+  await p.addInitScript(() => { window.__shared = []; navigator.share = async (d) => { window.__shared.push(d.files[0]); }; navigator.canShare = () => true; }); // Linux の Chrome には canShare が無い
   await p.setViewportSize({ width: 360, height: 640 });
   await p.goto(`chrome-extension://${extId}/sidepanel.html`);
   await p.waitForFunction(() => document.body.dataset.mode === 'worst_spot', null, { timeout: 30000, polling: 'raf' });
